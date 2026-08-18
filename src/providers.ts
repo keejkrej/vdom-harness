@@ -1,12 +1,76 @@
+import { type AgentNode, modelId } from "./ir.js";
+
 export type Message = {
   role: "system" | "user" | "assistant";
   content: string;
 };
 
+export type CompleteOpts = {
+  role?: string;
+  temperature?: number;
+  /** Override the provider's default model for this call (OpenAI-compatible). */
+  model?: string;
+};
+
 export type Provider = {
   name: string;
-  complete(msgs: Message[], opts?: { role?: string; temperature?: number }): Promise<string>;
+  /** Bound model id when this provider was resolved for a specific AgentNode.model. */
+  model?: string;
+  complete(msgs: Message[], opts?: CompleteOpts): Promise<string>;
 };
+
+/** Test / custom providers keyed by model id. */
+const registry = new Map<string, Provider>();
+
+/** Lazily built providers for model ids (OpenAI or tagged deterministic). */
+const byModel = new Map<string, Provider>();
+
+let defaultProvider: Provider | undefined;
+
+/** Register a provider for a model id (tests inject fakes here). */
+export function registerProvider(id: string, provider: Provider): void {
+  registry.set(id, provider);
+}
+
+/** Drop registry + caches. Used by tests for isolation. */
+export function clearProviderRegistry(): void {
+  registry.clear();
+  byModel.clear();
+  defaultProvider = undefined;
+}
+
+function createProviderForId(id: string): Provider {
+  const key = process.env.OPENAI_API_KEY;
+  if (key) {
+    return new OpenAICompatibleProvider(
+      key,
+      process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
+      id,
+    );
+  }
+  return new DeterministicProvider(id);
+}
+
+/**
+ * Resolve the chat client for an AgentNode.model value.
+ * Missing model → process-global createProvider() singleton (same fallback as today).
+ * Registered ids win; otherwise cache one provider per model id.
+ */
+export function resolveProvider(model?: AgentNode["model"]): Provider {
+  const id = modelId(model);
+  if (id) {
+    const registered = registry.get(id);
+    if (registered) return registered;
+    let cached = byModel.get(id);
+    if (!cached) {
+      cached = createProviderForId(id);
+      byModel.set(id, cached);
+    }
+    return cached;
+  }
+  if (!defaultProvider) defaultProvider = createProvider();
+  return defaultProvider;
+}
 
 const CRITIQUE =
   "The transformation is incorrect. Reverse each word independently, not the whole string.";
@@ -108,9 +172,15 @@ function selfRefineGraphJson(): string {
  * because each role implements a fixed transformation of the extracted input.
  */
 export class DeterministicProvider implements Provider {
-  name = "deterministic";
+  name: string;
+  model?: string;
 
-  async complete(msgs: Message[], opts?: { role?: string; temperature?: number }): Promise<string> {
+  constructor(model?: string) {
+    this.model = model;
+    this.name = model ? `deterministic:${model}` : "deterministic";
+  }
+
+  async complete(msgs: Message[], opts?: CompleteOpts): Promise<string> {
     const role = inferRole(msgs, opts);
     const input = extractInput(msgs);
 
@@ -153,14 +223,17 @@ type ChatCompletionResponse = {
 
 export class OpenAICompatibleProvider implements Provider {
   name = "openai";
+  model: string;
 
   constructor(
     private readonly apiKey: string,
     private readonly baseUrl: string,
-    private readonly model: string,
-  ) {}
+    model: string,
+  ) {
+    this.model = model;
+  }
 
-  async complete(msgs: Message[], opts?: { role?: string; temperature?: number }): Promise<string> {
+  async complete(msgs: Message[], opts?: CompleteOpts): Promise<string> {
     const url = `${this.baseUrl.replace(/\/$/, "")}/chat/completions`;
     const res = await fetch(url, {
       method: "POST",
@@ -169,7 +242,7 @@ export class OpenAICompatibleProvider implements Provider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: this.model,
+        model: opts?.model ?? this.model,
         messages: msgs,
         temperature: opts?.temperature ?? 0,
       }),

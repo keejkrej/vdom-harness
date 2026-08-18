@@ -3,7 +3,9 @@ import {
   type AgentNode,
   type Trace,
   flatten,
+  modelId,
 } from "./ir.js";
+import { type Provider, resolveProvider } from "./providers.js";
 
 export type ReconcileOp =
   | { op: "mount"; node: AgentNode; parentKey?: string }
@@ -22,6 +24,8 @@ export type PhysicalNode = {
   descriptor: AgentNode;
   status: PhysicalStatus;
   traces: Trace[];
+  /** Bound chat client for this node's model. Undefined when model is missing (runGraph uses its fallback). */
+  provider?: Provider;
 };
 
 const OP_MARK: Record<ReconcileOp["op"], string> = {
@@ -87,6 +91,27 @@ export function formatOps(ops: ReconcileOp[]): string {
   return ops.map((op) => `  ${formatOp(op)}`).join("\n");
 }
 
+function bindProvider(
+  op: ReconcileOp,
+  existing: PhysicalNode | undefined,
+): Provider | undefined {
+  if (op.op === "unmount") return undefined;
+
+  const nextId = modelId(op.node.model);
+  if (nextId == null) return undefined;
+
+  if (op.op === "retain" && existing?.provider) {
+    return existing.provider;
+  }
+
+  if (op.op === "update" && existing?.provider) {
+    const prevId = modelId(op.prev.model);
+    if (prevId === nextId) return existing.provider;
+  }
+
+  return resolveProvider(op.node.model);
+}
+
 export class RuntimeDOM {
   current = new Map<string, PhysicalNode>();
   private prev?: AgentGraph;
@@ -101,10 +126,12 @@ export class RuntimeDOM {
       const status: PhysicalStatus =
         op.op === "mount" ? "mounted" : op.op === "update" ? "updated" : "retained";
       const existing = this.current.get(op.node.key);
+      const provider = bindProvider(op, existing);
       this.current.set(op.node.key, {
         descriptor: op.node,
         status,
         traces: existing?.traces ?? [],
+        provider,
       });
     }
     this.prev = next;
