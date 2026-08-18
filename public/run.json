@@ -1,0 +1,501 @@
+{
+  "generatedAt": "2026-08-17T06:39:51.349Z",
+  "provider": "deterministic",
+  "task": {
+    "id": "word-reverse",
+    "input": "dom virtual",
+    "expected": "mod lautriv"
+  },
+  "duration": 23450,
+  "scores": {
+    "selfRefine": 1,
+    "reflexion": 1,
+    "v1": 0,
+    "v2": 1
+  },
+  "events": [
+    {
+      "t": 0,
+      "type": "title",
+      "text": "Pi customizes an agent. DSH composes a runtime. vdom reconciles a society."
+    },
+    {
+      "t": 1400,
+      "type": "paper",
+      "name": "Self-Refine",
+      "technique": "self-refine",
+      "authors": "Madaan et al.",
+      "abstract": "Self-Refine (Madaan et al.) improves generation by iterative self-feedback.\nA generator produces an output, a feedback model critiques it, and a refinement\nmodel revises the output using that critique. Repeat until quality saturates.",
+      "phase": "self-refine"
+    },
+    {
+      "t": 3000,
+      "type": "compile",
+      "name": "Self-Refine",
+      "graphId": "self-refine",
+      "nodes": [
+        {
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "key": "critic",
+          "role": "critic",
+          "parentKey": "solve",
+          "kind": "agent"
+        },
+        {
+          "key": "refine",
+          "role": "refine",
+          "parentKey": "critic",
+          "kind": "agent"
+        }
+      ],
+      "phase": "self-refine"
+    },
+    {
+      "t": 3400,
+      "type": "mount",
+      "graphId": "self-refine",
+      "version": 1,
+      "label": "Self-Refine",
+      "phase": "self-refine",
+      "nodes": [
+        {
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "key": "critic",
+          "role": "critic",
+          "parentKey": "solve",
+          "kind": "agent"
+        },
+        {
+          "key": "refine",
+          "role": "refine",
+          "parentKey": "critic",
+          "kind": "agent"
+        }
+      ],
+      "ops": [
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "critic",
+          "role": "critic",
+          "parentKey": "solve",
+          "kind": "agent"
+        },
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "refine",
+          "role": "refine",
+          "parentKey": "critic",
+          "kind": "agent"
+        }
+      ]
+    },
+    {
+      "t": 4200,
+      "type": "trace",
+      "role": "solve",
+      "input": "dom virtual",
+      "output": "lautriv mod",
+      "nodeKey": "solve",
+      "phase": "self-refine"
+    },
+    {
+      "t": 5000,
+      "type": "trace",
+      "role": "critic",
+      "input": "dom virtual",
+      "output": "The transformation is incorrect. Reverse each word independently, not the whole string.",
+      "nodeKey": "critic",
+      "phase": "self-refine"
+    },
+    {
+      "t": 5800,
+      "type": "trace",
+      "role": "refine",
+      "input": "dom virtual",
+      "output": "mod lautriv",
+      "nodeKey": "refine",
+      "phase": "self-refine"
+    },
+    {
+      "t": 6400,
+      "type": "score",
+      "value": 1,
+      "label": "Self-Refine",
+      "nodes": 3,
+      "phase": "self-refine"
+    },
+    {
+      "t": 7600,
+      "type": "paper",
+      "name": "Reflexion",
+      "technique": "reflexion",
+      "authors": "Shinn et al.",
+      "abstract": "Reflexion (Shinn et al.) reinforces language agents through linguistic feedback.\nAn actor attempts a task, a reflection model verbalizes a lesson, and episodic\nmemory stores it so the next trial can improve without weight updates.",
+      "phase": "reflexion"
+    },
+    {
+      "t": 8500,
+      "type": "compile",
+      "name": "Reflexion",
+      "graphId": "reflexion",
+      "nodes": [
+        {
+          "key": "actor",
+          "role": "actor",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "key": "reflect",
+          "role": "reflect",
+          "parentKey": "actor",
+          "kind": "agent"
+        },
+        {
+          "key": "memory",
+          "role": "memory",
+          "parentKey": "actor",
+          "kind": "memory"
+        }
+      ],
+      "phase": "reflexion"
+    },
+    {
+      "t": 8800,
+      "type": "reconcile",
+      "from": "self-refine",
+      "to": "reflexion",
+      "graphId": "reflexion",
+      "version": 1,
+      "label": "Reflexion",
+      "phase": "reflexion",
+      "nodes": [
+        {
+          "key": "actor",
+          "role": "actor",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "key": "reflect",
+          "role": "reflect",
+          "parentKey": "actor",
+          "kind": "agent"
+        },
+        {
+          "key": "memory",
+          "role": "memory",
+          "parentKey": "actor",
+          "kind": "memory"
+        }
+      ],
+      "ops": [
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "actor",
+          "role": "actor",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "reflect",
+          "role": "reflect",
+          "parentKey": "actor",
+          "kind": "agent"
+        },
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "memory",
+          "role": "memory",
+          "parentKey": "actor",
+          "kind": "memory"
+        },
+        {
+          "op": "unmount",
+          "mark": "-",
+          "key": "refine",
+          "role": "refine",
+          "parentKey": "critic",
+          "kind": "agent"
+        },
+        {
+          "op": "unmount",
+          "mark": "-",
+          "key": "critic",
+          "role": "critic",
+          "parentKey": "solve",
+          "kind": "agent"
+        },
+        {
+          "op": "unmount",
+          "mark": "-",
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        }
+      ]
+    },
+    {
+      "t": 9150,
+      "type": "trace",
+      "role": "actor",
+      "input": "dom virtual",
+      "output": "lautriv mod",
+      "nodeKey": "actor",
+      "phase": "reflexion"
+    },
+    {
+      "t": 9500,
+      "type": "trace",
+      "role": "reflect",
+      "input": "dom virtual",
+      "output": "reverse each word independently; do not reverse the entire string.",
+      "nodeKey": "reflect",
+      "phase": "reflexion"
+    },
+    {
+      "t": 9850,
+      "type": "trace",
+      "role": "actor",
+      "input": "dom virtual",
+      "output": "mod lautriv",
+      "nodeKey": "actor",
+      "phase": "reflexion"
+    },
+    {
+      "t": 10350,
+      "type": "score",
+      "value": 1,
+      "label": "Reflexion",
+      "nodes": 3,
+      "phase": "reflexion"
+    },
+    {
+      "t": 11450,
+      "type": "paper",
+      "name": "Runtime evolution",
+      "technique": "one-shot",
+      "authors": "",
+      "abstract": "A one-shot solve node. No critic. No refine. The society is a single agent.",
+      "phase": "v1"
+    },
+    {
+      "t": 11950,
+      "type": "compile",
+      "name": "one-shot",
+      "graphId": "oneshot",
+      "nodes": [
+        {
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        }
+      ],
+      "phase": "v1"
+    },
+    {
+      "t": 12250,
+      "type": "reconcile",
+      "from": "reflexion",
+      "to": "oneshot",
+      "graphId": "oneshot",
+      "version": 1,
+      "label": "v1 one-shot",
+      "phase": "v1",
+      "nodes": [
+        {
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        }
+      ],
+      "ops": [
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "op": "unmount",
+          "mark": "-",
+          "key": "memory",
+          "role": "memory",
+          "parentKey": "actor",
+          "kind": "memory"
+        },
+        {
+          "op": "unmount",
+          "mark": "-",
+          "key": "reflect",
+          "role": "reflect",
+          "parentKey": "actor",
+          "kind": "agent"
+        },
+        {
+          "op": "unmount",
+          "mark": "-",
+          "key": "actor",
+          "role": "actor",
+          "parentKey": null,
+          "kind": "agent"
+        }
+      ]
+    },
+    {
+      "t": 12950,
+      "type": "trace",
+      "role": "solve",
+      "input": "dom virtual",
+      "output": "lautriv mod",
+      "nodeKey": "solve",
+      "phase": "v1"
+    },
+    {
+      "t": 13650,
+      "type": "score",
+      "value": 0,
+      "label": "v1 one-shot",
+      "nodes": 1,
+      "phase": "v1"
+    },
+    {
+      "t": 14750,
+      "type": "scientist",
+      "text": "emit replacement graph",
+      "from": "oneshot",
+      "to": "oneshot-self-refine",
+      "phase": "scientist"
+    },
+    {
+      "t": 16150,
+      "type": "reconcile",
+      "from": "v1",
+      "to": "v2",
+      "graphId": "oneshot-self-refine",
+      "version": 2,
+      "label": "v2 one-shot+critic",
+      "phase": "v2",
+      "nodes": [
+        {
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "key": "critic",
+          "role": "critic",
+          "parentKey": "solve",
+          "kind": "agent"
+        },
+        {
+          "key": "refine",
+          "role": "refine",
+          "parentKey": "critic",
+          "kind": "agent"
+        }
+      ],
+      "ops": [
+        {
+          "op": "retain",
+          "mark": "=",
+          "key": "solve",
+          "role": "solve",
+          "parentKey": null,
+          "kind": "agent"
+        },
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "critic",
+          "role": "critic",
+          "parentKey": "solve",
+          "kind": "agent"
+        },
+        {
+          "op": "mount",
+          "mark": "+",
+          "key": "refine",
+          "role": "refine",
+          "parentKey": "critic",
+          "kind": "agent"
+        }
+      ]
+    },
+    {
+      "t": 16950,
+      "type": "trace",
+      "role": "solve",
+      "input": "dom virtual",
+      "output": "lautriv mod",
+      "nodeKey": "solve",
+      "phase": "v2"
+    },
+    {
+      "t": 17750,
+      "type": "trace",
+      "role": "critic",
+      "input": "dom virtual",
+      "output": "The transformation is incorrect. Reverse each word independently, not the whole string.",
+      "nodeKey": "critic",
+      "phase": "v2"
+    },
+    {
+      "t": 18550,
+      "type": "trace",
+      "role": "refine",
+      "input": "dom virtual",
+      "output": "mod lautriv",
+      "nodeKey": "refine",
+      "phase": "v2"
+    },
+    {
+      "t": 19250,
+      "type": "score",
+      "value": 1,
+      "label": "v2 one-shot+critic",
+      "nodes": 3,
+      "phase": "v2"
+    },
+    {
+      "t": 20650,
+      "type": "compare",
+      "phase": "compare"
+    },
+    {
+      "t": 23450,
+      "type": "done",
+      "phase": "done"
+    }
+  ]
+}
