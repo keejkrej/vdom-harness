@@ -5,3 +5,7 @@ export * from "./runtime.js";
 export * from "./papers.js";
 export * from "./benchmarks.js";
 export * from "./scientist.js";
+export * from "./capability.js";
+export * from "./trainer.js";
+export * from "./lifecycle.js";
+export * from "./improve.js";

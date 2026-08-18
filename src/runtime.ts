@@ -31,9 +31,15 @@ function isGrouping(n: AgentNode): boolean {
     k === "channel" ||
     k === "policy" ||
     k === "tool" ||
-    k === "capability" ||
-    k === "artifact"
+    k === "artifact" ||
+    k === "adapter" ||
+    // Unmounted / proposed capabilities are structural only.
+    (k === "capability" && n.status !== "mounted")
   );
+}
+
+function isMountedCapability(n: AgentNode): boolean {
+  return kindOf(n) === "capability" && n.status === "mounted";
 }
 
 function isReflexionHost(n: AgentNode): boolean {
@@ -120,6 +126,29 @@ export async function runGraph(
     return output;
   };
 
+  const runCapability = async (n: AgentNode, parentOutputs: string[]): Promise<string> => {
+    const phys = dom?.current.get(n.key);
+    const fn = phys?.capability;
+    if (!fn) {
+      throw new Error(
+        `mounted capability ${n.key} has no loaded module (moduleId=${n.moduleId ?? "?"})`,
+      );
+    }
+    const input = parentOutputs[parentOutputs.length - 1] ?? task;
+    const output = await fn(input);
+    outputs[n.key] = output;
+    const trace: Trace = {
+      nodeKey: n.key,
+      role: n.role,
+      input,
+      output,
+      ts: Date.now(),
+    };
+    traces.push(trace);
+    if (phys) phys.traces.push(trace);
+    return output;
+  };
+
   const walk = async (n: AgentNode, parentOutputs: string[]): Promise<void> => {
     if (isReflexionHost(n)) {
       await runReflexionNode(n, parentOutputs);
@@ -132,6 +161,14 @@ export async function runGraph(
       outputs[n.key] = content;
       for (const child of n.children ?? []) {
         await walk(child, [...parentOutputs, content]);
+      }
+      return;
+    }
+
+    if (isMountedCapability(n)) {
+      const out = await runCapability(n, parentOutputs);
+      for (const child of n.children ?? []) {
+        await walk(child, [...parentOutputs, out]);
       }
       return;
     }

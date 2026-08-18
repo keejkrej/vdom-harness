@@ -50,7 +50,19 @@ Without a key, the deterministic provider stays active.
 
 ## Limitation
 
-Papers can synthesize topology, prompts, memory, and routing. They cannot yet emit arbitrary executable tools. The next primitive is a Capability node: generate source -> sandbox -> tests -> mount.
+Papers can synthesize topology, prompts, memory, and routing. Arbitrary executable tools must go through the Capability gate below — scientist JSON is never trusted as code.
+
+## Runtime improvement
+
+Agents improve the society by emitting graph changes. The reconciler mounts, updates, or unmounts — agents do not patch `RuntimeDOM` internals.
+
+Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
+
+1. **Harness (capability)** — propose a `kind: "capability"` node with a `source` ref → sandbox validation → eval (`runBenchmark`) → mount on success. Raw scientist JSON is never executed; only `module:<id>` refs (or exact fingerprints) against a pre-approved capability registry pass the sandbox. Failed eval leaves the live graph unchanged.
+
+2. **Weights (adapter)** — an injectable `Trainer` runs out-of-process (tests use `FakeTrainer`) and returns an `AdapterArtifact`. A `kind: "adapter"` node carries `adapterRef` / `modelRef`; on a passing gate the target agent's `model` pointer updates (same binding as AgentNode.model → PhysicalNode.provider). Failed eval rejects the candidate; a later regression can `rollbackAdapter` (unmount + restore previous model).
+
+`improveLoop` chooses topology, capability, or adapter (or `auto`). Real LoRA / Hugging Face Jobs stay behind the `Trainer` port — see `describeHfJobsExtension` in `src/trainer.ts`. No in-process GPU training.
 
 ## Layout
 
@@ -61,6 +73,10 @@ Papers can synthesize topology, prompts, memory, and routing. They cannot yet em
 - src/papers.ts -- paper to graph
 - src/benchmarks.ts -- word-reverse and friends
 - src/scientist.ts -- evolve the graph from traces
+- src/capability.ts -- approved capability registry + sandbox gate
+- src/trainer.ts -- Trainer port, FakeTrainer, adapter artifacts
+- src/lifecycle.ts -- propose → sandbox → eval → mount | reject | rollback
+- src/improve.ts -- improveLoop (topology | capability | adapter)
 - src/demo.ts -- the loop, printed
 - src/export-run.ts -- real run to public/run.json
 - src/serve.ts -- static viz on :4173
