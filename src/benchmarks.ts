@@ -1,5 +1,6 @@
 import { type AgentGraph, flatten } from "./ir.js";
 import { type Provider } from "./providers.js";
+import { type RuntimeDOM } from "./reconciler.js";
 import { runGraph, type RunResult } from "./runtime.js";
 
 export type Task = {
@@ -41,8 +42,9 @@ export async function runBenchmark(
   g: AgentGraph,
   task: Task,
   provider: Provider,
+  dom?: RuntimeDOM,
 ): Promise<BenchmarkResult> {
-  const result = await runGraph(g, task.input, provider);
+  const result = await runGraph(g, task.input, provider, dom);
   return {
     ...result,
     score: task.grade(result.final),

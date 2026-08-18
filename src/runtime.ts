@@ -3,8 +3,9 @@ import {
   type AgentNode,
   type Trace,
   kindOf,
+  modelId,
 } from "./ir.js";
-import { type Provider, type Message } from "./providers.js";
+import { type Provider, type Message, resolveProvider } from "./providers.js";
 import { RuntimeDOM } from "./reconciler.js";
 
 export type RunResult = {
@@ -69,6 +70,18 @@ function buildUser(
   return parts.join("\n\n");
 }
 
+/** Prefer the physical node's bound client; else resolve from n.model; else fallback. */
+export function providerForNode(
+  n: AgentNode,
+  fallback: Provider,
+  dom?: RuntimeDOM,
+): Provider {
+  const bound = dom?.current.get(n.key)?.provider;
+  if (bound) return bound;
+  if (modelId(n.model) != null) return resolveProvider(n.model);
+  return fallback;
+}
+
 export async function runGraph(
   g: AgentGraph,
   task: string,
@@ -88,7 +101,11 @@ export async function runGraph(
       { role: "system", content: buildSystem(n) },
       { role: "user", content: buildUser(task, parentOutputs, allMemories(), traces) },
     ];
-    const output = await provider.complete(msgs, { role: n.role });
+    const client = providerForNode(n, provider, dom);
+    const output = await client.complete(msgs, {
+      role: n.role,
+      model: modelId(n.model),
+    });
     outputs[n.key] = output;
     const trace: Trace = {
       nodeKey: n.key,

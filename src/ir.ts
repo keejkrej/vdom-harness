@@ -94,3 +94,14 @@ export function findNode(g: AgentGraph, key: string): AgentNode | undefined {
 export function kindOf(n: AgentNode): NodeKind {
   return n.kind ?? "agent";
 }
+
+/** Stable id for AgentNode.model — string as-is, or object.intelligence. */
+export function modelId(model?: AgentNode["model"]): string | undefined {
+  if (model == null) return undefined;
+  if (typeof model === "string") {
+    const id = model.trim();
+    return id.length > 0 ? id : undefined;
+  }
+  const id = model.intelligence?.trim();
+  return id && id.length > 0 ? id : undefined;
+}

@@ -1,6 +1,16 @@
-import { flatten, cloneGraph, node, graph, type AgentGraph } from "./ir.js";
+import { flatten, cloneGraph, node, graph, modelId, type AgentGraph } from "./ir.js";
 import { reconcile, propsChanged, RuntimeDOM } from "./reconciler.js";
-import { DeterministicProvider, reverseEntire, reverseEachWord } from "./providers.js";
+import {
+  DeterministicProvider,
+  reverseEntire,
+  reverseEachWord,
+  registerProvider,
+  clearProviderRegistry,
+  resolveProvider,
+  type Provider,
+  type Message,
+  type CompleteOpts,
+} from "./providers.js";
 import {
   compilePaper,
   SELF_REFINE_ABSTRACT,
@@ -11,6 +21,7 @@ import {
 } from "./papers.js";
 import { WORD_REVERSE, WORD_REVERSE_HELLO, runBenchmark } from "./benchmarks.js";
 import { applySelfRefineMutation, evolveOnce } from "./scientist.js";
+import { runGraph, providerForNode } from "./runtime.js";
 
 let passed = 0;
 let failed = 0;
@@ -162,6 +173,121 @@ async function testEvolution(): Promise<void> {
   assert(flatten(evolved).some((f) => f.node.key === "refine"), "scientist adds refine");
 }
 
+/** Fake provider that records which model id handled each complete() call. */
+class RecordingProvider implements Provider {
+  name: string;
+  model: string;
+  calls: CompleteOpts[] = [];
+
+  constructor(model: string) {
+    this.model = model;
+    this.name = `mock:${model}`;
+  }
+
+  async complete(_msgs: Message[], opts?: CompleteOpts): Promise<string> {
+    this.calls.push({ ...opts });
+    // Role-aware enough for a one-shot solve walk.
+    const role = (opts?.role ?? "").toLowerCase();
+    if (role === "solve" || role === "actor" || role === "one-shot" || role === "oneshot") {
+      return reverseEntire("dom virtual");
+    }
+    return `ok:${this.model}`;
+  }
+}
+
+async function testModelBinding(): Promise<void> {
+  clearProviderRegistry();
+
+  assertEq(modelId("mock-a"), "mock-a", "string model id");
+  assertEq(modelId({ intelligence: "gpt-x" }), "gpt-x", "object intelligence id");
+  assertEq(modelId(undefined), undefined, "missing model is undefined");
+  assertEq(modelId({ cost: "low" }), undefined, "object without intelligence");
+
+  const mockA = new RecordingProvider("mock-a");
+  const mockB = new RecordingProvider("mock-b");
+  registerProvider("mock-a", mockA);
+  registerProvider("mock-b", mockB);
+
+  const withModel = (model: string, version: number): AgentGraph =>
+    graph({
+      id: "model-bind",
+      version,
+      root: node({
+        key: "solve",
+        role: "solve",
+        objective: "Solve the task in a single pass",
+        technique: "one-shot",
+        model,
+      }),
+    });
+
+  const v1 = withModel("mock-a", 1);
+  const v2 = withModel("mock-b", 2);
+  const v2again = withModel("mock-b", 3);
+
+  // Diff-only: model change → update; same model → retain.
+  const diff = reconcile(v1, v2);
+  assertEq(diff.ops.map((o) => `${o.op}:${o.node.key}`).join(","), "update:solve", "model change yields update:solve");
+  const same = reconcile(v2, v2again);
+  assertEq(same.ops[0]?.op, "retain", "identical model retains");
+
+  const dom = new RuntimeDOM();
+  const r1 = dom.reconcile(v1);
+  assertEq(r1.ops[0]?.op, "mount", "DOM mounts model-a graph");
+  const phys1 = dom.current.get("solve");
+  assert(phys1?.provider === mockA, "mount binds mock-a provider");
+  assertEq(phys1?.provider?.model, "mock-a", "bound provider model is mock-a");
+
+  const r2 = dom.reconcile(v2);
+  assertEq(r2.ops[0]?.op, "update", "DOM update on model swap");
+  const phys2 = dom.current.get("solve");
+  assert(phys2?.provider === mockB, "update rebinds to mock-b");
+  assert(phys2?.provider !== mockA, "old provider discarded on model change");
+  assertEq(dom.current.get("solve")?.status, "updated", "physical status updated");
+
+  const r3 = dom.reconcile(v2again);
+  assertEq(r3.ops[0]?.op, "retain", "DOM retain when model unchanged");
+  const phys3 = dom.current.get("solve");
+  assert(phys3?.provider === mockB, "retain keeps the same client instance");
+  assertEq(dom.current.get("solve")?.status, "retained", "physical status retained");
+
+  // Execution actually calls the bound provider (not the fallback).
+  const fallback = new DeterministicProvider("unused-fallback");
+  mockB.calls = [];
+  const run = await runGraph(v2again, WORD_REVERSE.input, fallback, dom);
+  assert(mockB.calls.length >= 1, "bound mock-b received complete()");
+  assertEq(mockB.calls[0]?.role, "solve", "bound provider saw solve role");
+  assertEq(run.final, reverseEntire("dom virtual"), "runGraph used bound provider output");
+
+  // Without DOM, n.model still selects the registered provider.
+  mockA.calls = [];
+  await runGraph(v1, WORD_REVERSE.input, fallback);
+  assert(mockA.calls.length >= 1, "runGraph resolves n.model without DOM");
+
+  // Missing model → same fallback as today.
+  const noModel = oneShotGraph();
+  const fb = new DeterministicProvider();
+  assert(providerForNode(noModel.root, fb) === fb, "missing model uses fallback provider");
+  assertEq(resolveProvider(undefined).name, "deterministic", "resolveProvider() default is deterministic without key");
+
+  // Object-form model binds via intelligence.
+  const objGraph = graph({
+    id: "obj-model",
+    version: 1,
+    root: node({
+      key: "solve",
+      role: "solve",
+      objective: "x",
+      model: { intelligence: "mock-a", cost: "low" },
+    }),
+  });
+  const dom2 = new RuntimeDOM();
+  dom2.reconcile(objGraph);
+  assert(dom2.current.get("solve")?.provider === mockA, "object model binds via intelligence");
+
+  clearProviderRegistry();
+}
+
 async function main(): Promise<void> {
   const tests: Array<[string, () => Promise<void>]> = [
     ["flatten / clone", testFlattenClone],
@@ -170,6 +296,7 @@ async function main(): Promise<void> {
     ["paper compiler", testPapers],
     ["self-refine + reflexion scores", testScores],
     ["evolution 0 → 1", testEvolution],
+    ["model bind / swap / retain", testModelBinding],
   ];
 
   for (const [name, fn] of tests) {
