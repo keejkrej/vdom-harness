@@ -1,0 +1,21 @@
+{
+  "name": "vdom-harness",
+  "version": "0.1.0",
+  "description": "A virtual DOM for agents: declare an AgentGraph, reconcile topology, execute.",
+  "type": "module",
+  "scripts": {
+    "demo": "tsx src/demo.ts",
+    "test": "tsx src/selftest.ts",
+    "build": "tsc --noEmit",
+    "export": "tsx src/export-run.ts",
+    "viz": "tsx src/serve.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}

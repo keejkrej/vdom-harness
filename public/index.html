@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>vdom — reconcile a society</title>
+  <meta name="description" content="Pi customizes an agent. DSH composes a runtime. vdom reconciles a society." />
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body class="cold">
+  <div class="progress" id="progress"></div>
+
+  <header class="top">
+    <div class="brand">
+      <span class="wordmark">vdom</span>
+      <span class="chip">runtime</span>
+    </div>
+    <p class="oneliner">
+      <span>Pi customizes an agent.</span>
+      <span>DSH composes a runtime.</span>
+      <span class="hi">vdom reconciles a society.</span>
+    </p>
+    <div class="status">
+      <span id="clock">0.0s</span>
+      <span class="dot" id="dot"></span>
+      <span class="hint">space</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="stage">
+      <div class="stage-head">
+        <span class="k">AgentGraph</span>
+        <span class="k dim" id="stage-meta">desired vs current</span>
+      </div>
+      <div class="graph" id="graph">
+        <div class="grid" aria-hidden="true"></div>
+        <div class="abstract" id="abstract"></div>
+        <div class="scientist" id="scientist" hidden>
+          <span class="k">scientist</span>
+          <span id="scientist-text">emit replacement graph</span>
+        </div>
+        <div class="hero-ops" id="hero-ops" hidden></div>
+        <svg class="edges" id="edges"></svg>
+        <div class="nodes" id="nodes"></div>
+      </div>
+      <div class="phys">
+        <span class="k">physical</span>
+        <div class="phys-keys" id="phys-keys"></div>
+      </div>
+    </section>
+
+    <aside class="rail">
+      <section class="panel">
+        <h2>Now</h2>
+        <div class="now-name" id="now-name">cold open</div>
+        <div class="now-tech" id="now-tech">declare a society</div>
+      </section>
+      <section class="panel traces">
+        <h2>Trace</h2>
+        <pre id="trace-log"></pre>
+      </section>
+      <section class="panel score-panel">
+        <h2>Score</h2>
+        <div class="score empty" id="score-val">–</div>
+        <div class="score-label" id="score-label"></div>
+      </section>
+      <section class="panel">
+        <h2>Reconcile</h2>
+        <ul class="ops" id="ops-list"></ul>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="compare" id="compare">
+    <div class="col">
+      <div class="who">Pi</div>
+      <div class="what">customize an agent</div>
+      <div class="stack">
+        <span>AgentSession</span>
+        <span>hooks</span>
+      </div>
+    </div>
+    <div class="col">
+      <div class="who">DeepSeek Harness</div>
+      <div class="what">compose a runtime</div>
+      <div class="stack">
+        <span>Cordis plugins</span>
+        <span>bundles</span>
+      </div>
+    </div>
+    <div class="col us">
+      <div class="who">vdom</div>
+      <div class="what">reconcile a society</div>
+      <div class="stack">
+        <span>AgentGraph</span>
+        <span>reconciler</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="demo.js"></script>
+</body>
+</html>
