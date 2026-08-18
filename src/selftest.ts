@@ -1,4 +1,4 @@
-import { flatten, cloneGraph, node, graph, modelId, type AgentGraph } from "./ir.js";
+import { flatten, cloneGraph, node, graph, modelId, findNode, type AgentGraph } from "./ir.js";
 import { reconcile, propsChanged, RuntimeDOM } from "./reconciler.js";
 import {
   DeterministicProvider,
@@ -22,6 +22,26 @@ import {
 import { WORD_REVERSE, WORD_REVERSE_HELLO, runBenchmark } from "./benchmarks.js";
 import { applySelfRefineMutation, evolveOnce } from "./scientist.js";
 import { runGraph, providerForNode } from "./runtime.js";
+import {
+  registerCapability,
+  clearCapabilityRegistry,
+  proposeCapability,
+  sandboxValidate,
+} from "./capability.js";
+import {
+  FakeTrainer,
+  FailingTrainer,
+  clearArtifactRegistry,
+  getArtifact,
+  describeHfJobsExtension,
+} from "./trainer.js";
+import {
+  gateCapability,
+  gateAdapter,
+  unmountAdapterOnFailure,
+  mountedImprovementKeys,
+} from "./lifecycle.js";
+import { improveLoop } from "./improve.js";
 
 let passed = 0;
 let failed = 0;
@@ -288,6 +308,252 @@ async function testModelBinding(): Promise<void> {
   clearProviderRegistry();
 }
 
+function resetImprovementFixtures(): void {
+  clearCapabilityRegistry();
+  clearArtifactRegistry();
+  clearProviderRegistry();
+  registerCapability({
+    id: "reverse-each-word",
+    run: (input) => reverseEachWord(input),
+    source: "fn:reverseEachWord",
+  });
+  registerCapability({
+    id: "reverse-entire",
+    run: (input) => reverseEntire(input),
+    source: "fn:reverseEntire",
+  });
+}
+
+async function testCapabilityMount(): Promise<void> {
+  resetImprovementFixtures();
+  const provider = new DeterministicProvider();
+  const base = oneShotGraph();
+  const before = await runBenchmark(base, WORD_REVERSE, provider);
+  assertEq(before.score, 0, "capability path starts at 0");
+
+  const proposal = proposeCapability({
+    key: "harness-cap",
+    source: "module:reverse-each-word",
+  });
+  const dom = new RuntimeDOM();
+  const gate = await gateCapability({
+    base,
+    proposal,
+    task: WORD_REVERSE,
+    provider,
+    dom,
+  });
+  assertEq(gate.action, "mount", "capability gate mounts on pass");
+  assertEq(gate.score, 1, "capability eval scores 1");
+  assertEq(
+    mountedImprovementKeys(gate.graph).capabilities.join(","),
+    "harness-cap",
+    "capability listed as mounted",
+  );
+
+  const phys = dom.current.get("harness-cap");
+  assert(phys?.capability != null, "PhysicalNode loads capability fn");
+  assertEq(phys?.descriptor.status, "mounted", "descriptor status mounted");
+
+  const after = await runBenchmark(gate.graph, WORD_REVERSE, provider, dom);
+  assertEq(after.score, 1, "mounted capability scores 1 in use");
+  assertEq(after.final, "mod lautriv", "capability output is per-word reverse");
+  resetImprovementFixtures();
+}
+
+async function testCapabilityReject(): Promise<void> {
+  resetImprovementFixtures();
+  const provider = new DeterministicProvider();
+  const base = oneShotGraph();
+
+  // Untrusted raw source — sandbox must reject (scientist safety).
+  const raw = proposeCapability({
+    key: "evil",
+    source: "eval('process.exit(1)')",
+  });
+  const sand = sandboxValidate(raw.source!);
+  assertEq(sand.ok, false, "raw source fails sandbox");
+
+  const gateRaw = await gateCapability({
+    base,
+    proposal: raw,
+    task: WORD_REVERSE,
+    provider,
+  });
+  assertEq(gateRaw.action, "reject", "untrusted capability rejected");
+  assertEq(gateRaw.graph.version, base.version, "live graph unchanged on sandbox reject");
+
+  // Trusted module that still fails the task eval.
+  const bad = proposeCapability({
+    key: "bad-cap",
+    source: "module:reverse-entire",
+  });
+  const gateBad = await gateCapability({
+    base,
+    proposal: bad,
+    task: WORD_REVERSE,
+    provider,
+  });
+  assertEq(gateBad.action, "reject", "failing capability not mounted");
+  assertEq(gateBad.score, 0, "failing capability scores 0");
+  assertEq(
+    mountedImprovementKeys(gateBad.graph).capabilities.length,
+    0,
+    "no capability mounted after fail",
+  );
+  assertEq(findNode(gateBad.graph, "bad-cap"), undefined, "rejected cap absent from live graph");
+  resetImprovementFixtures();
+}
+
+async function testAdapterMount(): Promise<void> {
+  resetImprovementFixtures();
+  const baseModel = "base-naive";
+  registerProvider(baseModel, new DeterministicProvider(baseModel));
+
+  const base = graph({
+    id: "adapter-start",
+    version: 1,
+    root: node({
+      key: "solve",
+      role: "solve",
+      objective: "Solve the task in a single pass",
+      technique: "one-shot",
+      model: baseModel,
+    }),
+  });
+
+  const provider = new DeterministicProvider();
+  const before = await runBenchmark(base, WORD_REVERSE, provider);
+  assertEq(before.score, 0, "adapter path starts at 0");
+
+  const trainer = new FakeTrainer();
+  const artifact = await trainer.train(before.traces, {
+    baseModel,
+    technique: "fake-lora",
+  });
+  assert(getArtifact(artifact.id) != null, "artifact registered");
+
+  const dom = new RuntimeDOM();
+  dom.reconcile(base);
+  assertEq(dom.current.get("solve")?.provider?.model, baseModel, "pre-train binds base model");
+
+  const gate = await gateAdapter({
+    base,
+    artifact,
+    targetKey: "solve",
+    task: WORD_REVERSE,
+    provider,
+    dom,
+  });
+  assertEq(gate.action, "mount", "adapter gate mounts on pass");
+  assertEq(gate.score, 1, "adapter eval scores 1");
+
+  const solve = findNode(gate.graph, "solve");
+  assertEq(solve?.model, artifact.resultModelId, "model pointer updated after mount");
+  assertEq(
+    mountedImprovementKeys(gate.graph).adapters.join(","),
+    "adapter",
+    "adapter listed as mounted",
+  );
+
+  const physAdapter = dom.current.get("adapter");
+  assert(physAdapter?.adapter != null, "PhysicalNode holds adapter artifact");
+  assertEq(physAdapter?.adapter?.id, artifact.id, "adapter artifact id matches");
+
+  const physSolve = dom.current.get("solve");
+  assertEq(physSolve?.provider?.model, artifact.resultModelId, "solve rebound to adapted model");
+
+  const after = await runBenchmark(gate.graph, WORD_REVERSE, provider, dom);
+  assertEq(after.score, 1, "adapted model scores 1");
+  resetImprovementFixtures();
+}
+
+async function testAdapterRollback(): Promise<void> {
+  resetImprovementFixtures();
+  const baseModel = "base-naive";
+  registerProvider(baseModel, new DeterministicProvider(baseModel));
+
+  const base = graph({
+    id: "adapter-fail",
+    version: 1,
+    root: node({
+      key: "solve",
+      role: "solve",
+      objective: "Solve",
+      technique: "one-shot",
+      model: baseModel,
+    }),
+  });
+
+  const provider = new DeterministicProvider();
+  const failing = new FailingTrainer();
+  const artifact = await failing.train([], { baseModel, technique: "fail-lora" });
+
+  const rejectGate = await gateAdapter({
+    base,
+    artifact,
+    targetKey: "solve",
+    task: WORD_REVERSE,
+    provider,
+  });
+  assertEq(rejectGate.action, "reject", "failing adapter rejected at gate");
+  assertEq(findNode(rejectGate.graph, "solve")?.model, baseModel, "model pointer unchanged on reject");
+  assertEq(findNode(rejectGate.graph, "adapter"), undefined, "adapter not in live graph");
+
+  // Mount a good adapter, then force rollback.
+  const good = await new FakeTrainer().train([], { baseModel, technique: "fake-lora" });
+  const dom = new RuntimeDOM();
+  const mountGate = await gateAdapter({
+    base,
+    artifact: good,
+    targetKey: "solve",
+    task: WORD_REVERSE,
+    provider,
+    dom,
+  });
+  assertEq(mountGate.action, "mount", "good adapter mounts");
+  assertEq(findNode(mountGate.graph, "solve")?.model, good.resultModelId, "pointer after mount");
+
+  const rollback = await unmountAdapterOnFailure({
+    current: mountGate.graph,
+    adapterKey: "adapter",
+    targetKey: "solve",
+    previousModel: baseModel,
+    task: WORD_REVERSE,
+    provider,
+    dom,
+  });
+  assertEq(rollback.action, "rollback", "rollback action");
+  assertEq(findNode(rollback.graph, "solve")?.model, baseModel, "model restored on rollback");
+  assertEq(findNode(rollback.graph, "adapter"), undefined, "adapter unmounted from graph");
+  assertEq(dom.current.get("adapter"), undefined, "adapter removed from DOM");
+  assertEq(dom.current.get("solve")?.provider?.model, baseModel, "DOM rebound to base model");
+  resetImprovementFixtures();
+}
+
+async function testImproveLoopCapability(): Promise<void> {
+  resetImprovementFixtures();
+  const history = await improveLoop({
+    task: WORD_REVERSE,
+    provider: new DeterministicProvider(),
+    maxIters: 3,
+    mode: "capability",
+    capabilitySource: "module:reverse-each-word",
+    start: oneShotGraph(),
+  });
+  const last = history[history.length - 1]!;
+  assert(last.benchmark.score === 1 || last.gate?.action === "mount", "improveLoop capability reaches 1");
+  const mounted = history.find((h) => h.gate?.action === "mount");
+  assert(mounted != null, "improveLoop recorded a capability mount");
+  resetImprovementFixtures();
+}
+
+async function testHfExtensionDoc(): Promise<void> {
+  const doc = describeHfJobsExtension({ baseModel: "gpt-ish", technique: "lora" });
+  assert(doc.includes("HF Jobs"), "HF Jobs extension doc present");
+  assert(doc.includes("gateAdapter"), "docs mention gateAdapter");
+}
+
 async function main(): Promise<void> {
   const tests: Array<[string, () => Promise<void>]> = [
     ["flatten / clone", testFlattenClone],
@@ -297,6 +563,12 @@ async function main(): Promise<void> {
     ["self-refine + reflexion scores", testScores],
     ["evolution 0 → 1", testEvolution],
     ["model bind / swap / retain", testModelBinding],
+    ["capability propose→pass→mount→use", testCapabilityMount],
+    ["capability fail→no mount", testCapabilityReject],
+    ["adapter train→mount→model pointer", testAdapterMount],
+    ["adapter fail eval→unmount/rollback", testAdapterRollback],
+    ["improveLoop capability path", testImproveLoopCapability],
+    ["HF Jobs extension docs", testHfExtensionDoc],
   ];
 
   for (const [name, fn] of tests) {

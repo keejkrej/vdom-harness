@@ -6,6 +6,8 @@ import {
   modelId,
 } from "./ir.js";
 import { type Provider, resolveProvider } from "./providers.js";
+import { getCapability, type CapabilityFn } from "./capability.js";
+import { getArtifact, type AdapterArtifact } from "./trainer.js";
 
 export type ReconcileOp =
   | { op: "mount"; node: AgentNode; parentKey?: string }
@@ -26,6 +28,10 @@ export type PhysicalNode = {
   traces: Trace[];
   /** Bound chat client for this node's model. Undefined when model is missing (runGraph uses its fallback). */
   provider?: Provider;
+  /** Loaded capability runner when kind=capability and status=mounted. */
+  capability?: CapabilityFn;
+  /** Mounted adapter artifact snapshot (kind=adapter, status=mounted). */
+  adapter?: AdapterArtifact;
 };
 
 const OP_MARK: Record<ReconcileOp["op"], string> = {
@@ -45,7 +51,13 @@ export function propsChanged(a: AgentNode, b: AgentNode): boolean {
     JSON.stringify(a.capabilities ?? null) !== JSON.stringify(b.capabilities ?? null) ||
     JSON.stringify(a.model ?? null) !== JSON.stringify(b.model ?? null) ||
     JSON.stringify(a.budget ?? null) !== JSON.stringify(b.budget ?? null) ||
-    (a.persistence ?? "ephemeral") !== (b.persistence ?? "ephemeral")
+    (a.persistence ?? "ephemeral") !== (b.persistence ?? "ephemeral") ||
+    (a.status ?? null) !== (b.status ?? null) ||
+    (a.source ?? null) !== (b.source ?? null) ||
+    (a.moduleId ?? null) !== (b.moduleId ?? null) ||
+    (a.modelRef ?? null) !== (b.modelRef ?? null) ||
+    (a.adapterRef ?? null) !== (b.adapterRef ?? null) ||
+    (a.artifactRef ?? null) !== (b.artifactRef ?? null)
   );
 }
 
@@ -112,6 +124,42 @@ function bindProvider(
   return resolveProvider(op.node.model);
 }
 
+function bindCapability(
+  op: ReconcileOp,
+  existing: PhysicalNode | undefined,
+): CapabilityFn | undefined {
+  if (op.op === "unmount") return undefined;
+  const n = op.node;
+  if ((n.kind ?? "agent") !== "capability") return existing?.capability;
+  if (n.status !== "mounted" || !n.moduleId) return undefined;
+
+  if (op.op === "retain" && existing?.capability && existing.descriptor.moduleId === n.moduleId) {
+    return existing.capability;
+  }
+
+  return getCapability(n.moduleId)?.run;
+}
+
+function bindAdapter(
+  op: ReconcileOp,
+  existing: PhysicalNode | undefined,
+): AdapterArtifact | undefined {
+  if (op.op === "unmount") return undefined;
+  const n = op.node;
+  if ((n.kind ?? "agent") !== "adapter") return existing?.adapter;
+  if (n.status !== "mounted" || !n.adapterRef) return undefined;
+
+  if (
+    op.op === "retain" &&
+    existing?.adapter &&
+    existing.descriptor.adapterRef === n.adapterRef
+  ) {
+    return existing.adapter;
+  }
+
+  return getArtifact(n.adapterRef);
+}
+
 export class RuntimeDOM {
   current = new Map<string, PhysicalNode>();
   private prev?: AgentGraph;
@@ -127,11 +175,15 @@ export class RuntimeDOM {
         op.op === "mount" ? "mounted" : op.op === "update" ? "updated" : "retained";
       const existing = this.current.get(op.node.key);
       const provider = bindProvider(op, existing);
+      const capability = bindCapability(op, existing);
+      const adapter = bindAdapter(op, existing);
       this.current.set(op.node.key, {
         descriptor: op.node,
         status,
         traces: existing?.traces ?? [],
         provider,
+        capability,
+        adapter,
       });
     }
     this.prev = next;

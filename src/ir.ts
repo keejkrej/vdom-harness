@@ -8,9 +8,21 @@ export type NodeKind =
   | "supervisor"
   | "barrier"
   | "capability"
+  | "adapter"
   | "artifact";
 
 export type Persistence = "ephemeral" | "session" | "durable";
+
+/**
+ * Gated lifecycle for capability / adapter / artifact nodes.
+ * proposed → validated (sandbox) → mounted | rejected; unmounted = rollback.
+ */
+export type MountStatus =
+  | "proposed"
+  | "validated"
+  | "mounted"
+  | "rejected"
+  | "unmounted";
 
 export type AgentNode = {
   key: string;
@@ -27,6 +39,21 @@ export type AgentNode = {
   children?: AgentNode[];
   paper?: string;
   technique?: string;
+  /** Lifecycle status for capability / adapter / artifact nodes. */
+  status?: MountStatus;
+  /**
+   * Proposed capability source. Never executed until sandboxed + eval-gated.
+   * Prefer `module:<id>` refs to pre-approved modules over raw code.
+   */
+  source?: string;
+  /** Approved capability module id after sandbox validation. */
+  moduleId?: string;
+  /** Base model an adapter trains against / remaps. */
+  modelRef?: string;
+  /** Mounted adapter artifact id (rollback target via unmount). */
+  adapterRef?: string;
+  /** Generic artifact ref (weights URI, bundle path, HF job id, …). */
+  artifactRef?: string;
 };
 
 export type AgentGraph = {
