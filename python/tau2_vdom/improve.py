@@ -60,8 +60,9 @@ CLAIM = (
     "until pass^k saturates or the round budget. Serving does not pause. "
     "The agent may get_agent_graph / set_agent_graph mid-turn (local intercept) "
     "and may rewrite C on the slow-clock Obs; host I_loop is fallback if it never "
-    "called set. Canned airline checklist is fallback when self-Obs JSON is invalid. "
-    "Not the saturated 5×4 retail one-shot pass^k=1.0."
+    "called set. A mixed batch applies C1 only to miss / I_loop tasks; wait+hit "
+    "keeps C0 (applyScope). Canned airline checklist is fallback when self-Obs JSON "
+    "is invalid. Not the saturated 5×4 retail one-shot pass^k=1.0."
 )
 SKIP_POLICY = (
     "A hung trial is retried once. If it still hangs, the simulation is recorded "
@@ -209,6 +210,7 @@ def run_slice(
     for trial in range(num_trials):
         for task in tasks:
             tid = str(getattr(task, "id", "?"))
+            os.environ["VDOM_TAU2_TASK_ID"] = tid
             t0 = time.time()
             print(f"[improve] start task={tid} trial={trial} technique={technique}", flush=True)
             sim = None
@@ -282,6 +284,24 @@ def run_slice(
     return simulations, pass_hat, avg, path, skipped
 
 
+def apply_scope_from_obs(obs_list: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Wait+hit keep C0; miss / I_loop get C1. Host mirror of the sidecar applyScope."""
+    hits: set[str] = set()
+    order: list[str] = []
+    for o in obs_list:
+        tid = str(o.get("taskId") or "")
+        if not tid:
+            continue
+        if tid not in order:
+            order.append(tid)
+        hit = o.get("arm") == "wait" and o.get("nSuccessProxy") == 1 and not o.get("hung")
+        if hit:
+            hits.add(tid)
+    wait_kept = [tid for tid in order if tid in hits]
+    looped = [tid for tid in order if tid not in hits]
+    return {"waitKept": wait_kept, "looped": looped}
+
+
 def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
     obs_list = []
     for sim in simulations:
@@ -298,6 +318,7 @@ def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
                 reward_info=getattr(sim, "reward_info", None),
                 hung=hung,
                 messages=getattr(sim, "messages", None) or [],
+                task_id=str(getattr(sim, "task_id", "") or "") or None,
             )
         )
     return obs_list
@@ -345,11 +366,13 @@ def _self_obs_ctx(
                         "output": t.get("output") or "",
                     }
                 )
+    task_ids = [str(getattr(sim, "task_id", "?")) for sim in simulations]
     return {
         "toolNames": tool_names,
         "rewards": rewards,
         "terminations": terminations,
         "missedToolNames": missed_tool_names_only(obs),
+        "taskIds": task_ids,
         "traces": traces,
     }
 
@@ -379,6 +402,7 @@ def _sidecar_i_loop(
         "selfObsPath": mutated.get("path") or "fallback",
         "action": mutated.get("action"),
         "rationale": mutated.get("rationale"),
+        "applyScope": mutated.get("applyScope") or apply_scope_from_obs(obs or []),
     }
 
 
@@ -580,6 +604,7 @@ def _round_record(
     i_weight: dict[str, Any] | None = None,
     self_obs_path: str | None = None,
     self_obs: dict[str, Any] | None = None,
+    apply_scope: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     rec: dict[str, Any] = {
         "round": round_i,
@@ -602,6 +627,8 @@ def _round_record(
         rec["selfObsPath"] = self_obs_path
     if self_obs:
         rec["selfObs"] = self_obs
+    if apply_scope is not None:
+        rec["applyScope"] = apply_scope
     return rec
 
 
@@ -713,10 +740,12 @@ def run_improve(
         )
         serving_paused = serving_paused or bool(loop.get("servingPaused"))
         self_obs_path = str(loop.get("selfObsPath") or "fallback")
+        apply_scope = loop.get("applyScope") or apply_scope_from_obs(obs)
         self_obs_rec = {
             "path": self_obs_path,
             "action": loop.get("action"),
             "rationale": loop.get("rationale"),
+            "applyScope": apply_scope,
         }
 
         if loop.get("action") == "wait" and not loop.get("applied"):
@@ -749,6 +778,7 @@ def run_improve(
                         i_weight=w,
                         self_obs_path=self_obs_path,
                         self_obs=self_obs_rec,
+                        apply_scope=apply_scope,
                     )
                 )
                 stop_reason = "weight-mounted" if w.get("mounted") else "weight-rejected"
@@ -792,6 +822,7 @@ def run_improve(
                     i_weight=w,
                     self_obs_path=self_obs_path,
                     self_obs=self_obs_rec,
+                    apply_scope=apply_scope,
                 )
             )
             stop_reason = "weight-mounted" if w.get("mounted") else "weight-rejected"
@@ -831,6 +862,7 @@ def run_improve(
                 reward_infos=[serialize_reward_info(getattr(s, "reward_info", None)) for s in sims],
                 self_obs_path=self_obs_path,
                 self_obs=self_obs_rec,
+                apply_scope=apply_scope,
             )
         )
         if _saturated(pass_hat):
@@ -908,6 +940,7 @@ def run_improve(
         "interventions": [x["intervention"] for x in improve_rounds],
         "graphDiffs": [x["graphDiff"] for x in improve_rounds],
         "selfObsPaths": [x.get("selfObsPath") for x in improve_rounds],
+        "applyScopes": [x.get("applyScope") for x in improve_rounds],
         "rounds": rounds,
         "servingPaused": serving_paused,
         "iWeight": i_weight_report,

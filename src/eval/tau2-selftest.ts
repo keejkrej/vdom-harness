@@ -11,16 +11,22 @@ import { observeTau2, actionFromCompletion, markRepeats } from "./tau2-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
 import {
   applyILoop,
+  computeApplyScope,
   gateWeightMount,
+  graphForScopedTask,
   graphHas,
   loopExhausted,
   obsNeedsPolicy,
   recommendIntervention,
   recommendSliceIntervention,
+  REFUSED_GLOBAL_ILOOP,
+  selectServingGraph,
+  servingTechnique,
 } from "./tau2-improve.js";
 import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.js";
 import { GOLD_RESERVATION_IDS, hasGoldReservationId, serializeKernelC } from "./tau2-kernel.js";
-import { runSelfObs, SELF_OBS_SYSTEM } from "./tau2-self-obs.js";
+import { formatSelfObsUser, runSelfObs, SELF_OBS_SYSTEM, SELF_OBS_WAIT_HIT_RULES } from "./tau2-self-obs.js";
+import { type Tau2Obs } from "./tau2-types.js";
 
 let passed = 0;
 let failed = 0;
@@ -535,10 +541,16 @@ async function testSelfObsWaitDoesNotChangeGraph(): Promise<void> {
 async function testNoGoldIdsInNewPrompts(): Promise<void> {
   const texts = [
     SELF_OBS_SYSTEM,
+    SELF_OBS_WAIT_HIT_RULES,
     serializeKernelC(tau2Graph("one-shot")),
     serializeKernelC(tau2Graph("self-refine")),
     serializeKernelC(tau2Graph("validator")),
     serializeKernelC(tau2Graph("policy-checklist")),
+    formatSelfObsUser({
+      graph: tau2Graph("one-shot"),
+      obs: [missCancelObs("39")],
+      missedToolNames: ["cancel_reservation"],
+    }),
   ];
   const captured: string[] = [];
   const inner = new DeterministicProvider();
@@ -774,6 +786,194 @@ async function testSetRejectsGoldIds(): Promise<void> {
   fakeEnvExecutor(turn.toolCalls);
 }
 
+function waitHitObs(taskId: string): Tau2Obs {
+  return {
+    taskId,
+    nSteps: 3,
+    nSuccessProxy: 1,
+    lastActions: ["update_reservation_flights"],
+    channels: ["env"],
+    critique: "path measure hits S; wait",
+    toolFailures: 0,
+    repeatActions: 0,
+    arm: "wait",
+    hung: false,
+  };
+}
+
+function missCancelObs(taskId: string): Tau2Obs {
+  return {
+    taskId,
+    nSteps: 4,
+    nSuccessProxy: 0,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "user asked cancel/update and agent refused; I_loop",
+    toolFailures: 0,
+    repeatActions: 0,
+    arm: "I_loop",
+    refusedCancel: true,
+    hung: false,
+    techniqueRecommendation: "policy-checklist",
+    missedActions: [{ name: "cancel_reservation", arguments: { reservation_id: "MSJ4OA" } }],
+  };
+}
+
+const CANCEL_POLICY_PATCH = {
+  action: "I_loop" as const,
+  graphPatch: {
+    technique: "policy-checklist" as const,
+    nodes: [
+      {
+        key: "cancel_policy",
+        role: "policy",
+        kind: "policy",
+        parentKey: "solve",
+        objective: "Check official cancel gates before cancel_reservation",
+        prompt: "Do not cancel-always. Never invent reservation IDs. Leave wait-hit tasks on C0.",
+      },
+    ],
+  },
+  rationale: "missed cancel on one episode; mount cancel_policy",
+};
+
+async function testMixedWaitHitKeepsC0(): Promise<void> {
+  const start = tau2Graph("one-shot");
+  const hit = waitHitObs("44");
+  const miss = missCancelObs("39");
+  const result = await runSelfObs({
+    graph: start,
+    obs: [hit, miss],
+    rewards: [1, 0],
+    taskIds: ["44", "39"],
+    missedToolNames: ["cancel_reservation"],
+    provider: scriptedProvider(JSON.stringify(CANCEL_POLICY_PATCH)),
+  });
+  assertEq(result.path, "self", "mixed batch uses self path");
+  assertEq(result.applied, true, "I_loop still applies to the miss");
+  assertEq(result.servingPaused, false, "servingPaused stays false");
+  assert(result.applyScope != null, "applyScope recorded");
+  assertEq(result.applyScope!.waitKept.join(","), "44", "wait-hit 44 kept on C0");
+  assertEq(result.applyScope!.looped.join(","), "39", "miss 39 is looped");
+  const waitGraph = graphForScopedTask(result.graphBefore, result.graphAfter, result.applyScope!, "44");
+  const missGraph = graphForScopedTask(result.graphBefore, result.graphAfter, result.applyScope!, "39");
+  assert(!graphHas(waitGraph, "cancel_policy"), "wait+hit next graph does not contain cancel_policy");
+  assert(graphHas(missGraph, "cancel_policy"), "miss next graph contains cancel_policy");
+  assert(!graphHas(start, "cancel_policy"), "C0 itself was not mutated");
+  const record = { selfObsPath: result.path, applyScope: result.applyScope };
+  assertEq(record.selfObsPath, "self", "latest-improve-style record has selfObsPath");
+  assertEq(record.applyScope?.waitKept[0], "44", "record applyScope shows the split");
+  assertEq(record.applyScope?.looped[0], "39", "record applyScope lists the looped miss");
+}
+
+async function testUnscopedILoopNeverSilentGlobal(): Promise<void> {
+  const start = tau2Graph("one-shot");
+  const result = await runSelfObs({
+    graph: start,
+    obs: [waitHitObs("44"), missCancelObs("39")],
+    rewards: [1, 0],
+    taskIds: ["44", "39"],
+    provider: scriptedProvider(
+      JSON.stringify({
+        ...CANCEL_POLICY_PATCH,
+        graphPatch: { ...CANCEL_POLICY_PATCH.graphPatch },
+        rationale: "unscoped global cancel_policy",
+      }),
+    ),
+  });
+  assert(result.applyScope != null, "unscoped mixed batch still records applyScope");
+  assertEq(result.applyScope!.waitKept.includes("44"), true, "unscoped patch does not take wait-hit");
+  const servedWait = selectServingGraph({
+    taskId: "44",
+    currentGraph: result.graphAfter,
+    graphBefore: result.graphBefore,
+    graphAfter: result.graphAfter,
+    applyScope: result.applyScope,
+  });
+  const silentGlobal = selectServingGraph({
+    currentGraph: result.graphAfter,
+    graphBefore: result.graphBefore,
+    graphAfter: result.graphAfter,
+    applyScope: result.applyScope,
+  });
+  assert(!graphHas(servedWait, "cancel_policy"), "wait-hit serving graph stays C0");
+  assert(!graphHas(silentGlobal, "cancel_policy"), "no silent global C1 when taskId is missing");
+  assert(graphHas(result.graphAfter, "cancel_policy"), "C1 exists for the miss subset");
+  const tech = servingTechnique(servedWait, {
+    taskId: "44",
+    applyScope: result.applyScope,
+    reqTechnique: "policy-checklist",
+    currentTechnique: "policy-checklist",
+  });
+  assertEq(tech, "one-shot", "wait-hit does not walk the new policy-checklist technique");
+}
+
+async function testAllMissSelfILoopStillApplies(): Promise<void> {
+  const start = tau2Graph("one-shot");
+  const result = await runSelfObs({
+    graph: start,
+    obs: [missCancelObs("39"), missCancelObs("18")],
+    rewards: [0, 0],
+    taskIds: ["39", "18"],
+    provider: scriptedProvider(JSON.stringify(CANCEL_POLICY_PATCH)),
+  });
+  assertEq(result.applied, true, "all-miss batch still applies");
+  assertEq(result.action, "I_loop", "loop is not dead");
+  assert(graphHas(result.graphAfter, "cancel_policy"), "valid self I_loop mounts cancel_policy");
+  assertEq(result.applyScope?.waitKept.length ?? 0, 0, "no wait-hit to keep");
+  assertEq(result.applyScope?.looped.join(","), "39,18", "both misses are looped");
+  const served = selectServingGraph({
+    taskId: "39",
+    currentGraph: result.graphAfter,
+    graphBefore: result.graphBefore,
+    graphAfter: result.graphAfter,
+    applyScope: result.applyScope,
+  });
+  assert(graphHas(served, "cancel_policy"), "all-miss serving uses C1");
+}
+
+async function testApplyILoopFallbackWaitHitGate(): Promise<void> {
+  const start = tau2Graph("one-shot");
+  const mixed = applyILoop(start, [waitHitObs("44"), missCancelObs("39")]);
+  assertEq(mixed.applied, true, "fallback still applies C1 for the miss");
+  assertEq(mixed.path, "fallback", "host ladder is fallback");
+  assertEq(mixed.applyScope?.waitKept.join(","), "44", "fallback applyScope keeps wait-hit");
+  assertEq(mixed.applyScope?.looped.join(","), "39", "fallback applyScope loops the miss");
+  const waitGraph = graphForScopedTask(mixed.graphBefore, mixed.graphAfter, mixed.applyScope!, "44");
+  const missGraph = graphForScopedTask(mixed.graphBefore, mixed.graphAfter, mixed.applyScope!, "39");
+  assert(!graphHas(waitGraph, "policy-checklist"), "fallback does not mount checklist on wait-hit");
+  assert(graphHas(missGraph, "policy-checklist"), "fallback mounts canned checklist on the miss");
+  const allHit = applyILoop(start, [waitHitObs("44"), waitHitObs("41")]);
+  assertEq(allHit.applied, false, "all wait-hit refuses a global mount");
+  assertEq(allHit.rationale, REFUSED_GLOBAL_ILOOP, "refuse rationale is explicit");
+  assert(!graphHas(allHit.graphAfter, "policy-checklist"), "refused fallback keeps C0");
+}
+
+async function testSelfObsPromptHasEpisodesNoGoldIds(): Promise<void> {
+  const user = formatSelfObsUser({
+    graph: tau2Graph("one-shot"),
+    obs: [waitHitObs("44"), missCancelObs("39")],
+    rewards: [1, 0],
+    taskIds: ["44", "39"],
+    missedToolNames: ["cancel_reservation"],
+  });
+  assert(user.includes("taskId=44"), "prompt lists wait-hit taskId");
+  assert(user.includes("taskId=39"), "prompt lists miss taskId");
+  assert(user.includes("arm=wait"), "prompt lists wait arm");
+  assert(user.includes("arm=I_loop"), "prompt lists I_loop arm");
+  assert(user.includes("hung=false"), "prompt lists hung");
+  assert(user.includes("writeTools=update_reservation_flights"), "prompt lists write tool names");
+  assert(user.includes(SELF_OBS_WAIT_HIT_RULES.split("\n")[0]!), "prompt repeats wait-hit rules");
+  assert(!hasGoldReservationId(user), "self-Obs user prompt has no gold reservation IDs");
+  assert(!hasGoldReservationId(SELF_OBS_SYSTEM), "self-Obs system prompt has no gold IDs");
+  assert(SELF_OBS_SYSTEM.includes("If arm is wait and reward is 1"), "system forbids inferring a miss on wait-hit");
+  assert(SELF_OBS_SYSTEM.includes("cancel-always"), "system forbids cancel-always on wait-hit");
+  assert(SELF_OBS_SYSTEM.includes('return {"action":"wait"}'), "system says wait if the patch cannot be gated");
+  const scope = computeApplyScope([waitHitObs("44"), missCancelObs("39")]);
+  assertEq(scope.waitKept.join(","), "44", "computeApplyScope waitKept");
+  assertEq(scope.looped.join(","), "39", "computeApplyScope looped");
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -801,6 +1001,11 @@ async function main(): Promise<void> {
     ["mock scripted self-Obs still 0 → 0.5 → 1.0", testMockSelfObsLadder],
     ["get then set changes graph; env never sees kernel tools", testGetThenSetChangesGraph],
     ["set_agent_graph rejects gold reservation IDs", testSetRejectsGoldIds],
+    ["mixed wait+hit keeps C0; miss gets cancel_policy", testMixedWaitHitKeepsC0],
+    ["unscoped I_loop never silent-global-mounts wait-hit", testUnscopedILoopNeverSilentGlobal],
+    ["all-miss valid self I_loop still applies", testAllMissSelfILoopStillApplies],
+    ["host applyILoop fallback uses the wait-hit gate", testApplyILoopFallbackWaitHitGate],
+    ["self-Obs prompt has per-episode arms and no gold IDs", testSelfObsPromptHasEpisodesNoGoldIds],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

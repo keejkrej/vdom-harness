@@ -43,6 +43,7 @@ export function observeTau2(opts: {
   rewardInfo?: Tau2RewardInfo | null;
   hung?: boolean;
   messages?: Array<{ role?: string; content?: string }>;
+  taskId?: string;
 }): Tau2Obs {
   const actions = markRepeats(opts.actions);
   const lastActions = actions.map((a) =>
@@ -89,6 +90,7 @@ export function observeTau2(opts: {
     obs.techniqueRecommendation = "policy-checklist";
   }
   obs.arm = recommendIntervention(obs);
+  if (opts.taskId) obs.taskId = opts.taskId;
   return obs;
 }
 

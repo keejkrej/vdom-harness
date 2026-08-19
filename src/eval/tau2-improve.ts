@@ -6,10 +6,14 @@ import {
 } from "../scientist.js";
 import { reconcile, type ReconcileOp } from "../reconciler.js";
 import { tau2Graph } from "./tau2-graph.js";
-import { type Tau2Obs, type Tau2Technique } from "./tau2-types.js";
+import { type ApplyScope, type Tau2Obs, type Tau2Technique } from "./tau2-types.js";
 import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.js";
 
+export type { ApplyScope } from "./tau2-types.js";
+
 export type InterventionArm = "I_loop" | "I_weight" | "wait";
+
+export const REFUSED_GLOBAL_ILOOP = "refused global I_loop: wait-hit in batch";
 
 export type GraphDiffOp = {
   op: ReconcileOp["op"];
@@ -29,6 +33,8 @@ export type ILoopResult = {
   path?: "self" | "fallback";
   action?: "wait" | "I_loop";
   rationale?: string;
+  /** Per-task C: wait+hit keep graphBefore (C0); miss / I_loop get graphAfter (C1). */
+  applyScope?: ApplyScope;
 };
 
 export type WeightGateDecision = {
@@ -43,6 +49,121 @@ export function graphHas(g: AgentGraph, key: string): boolean {
   return flatten(g).some((f) => f.node.key === key);
 }
 
+function asObsList(obs?: Tau2Obs | Tau2Obs[] | null): Tau2Obs[] {
+  if (!obs) return [];
+  return Array.isArray(obs) ? obs : [obs];
+}
+
+/** Wait + official hit. Hung is never a hit. */
+export function isWaitHit(obs: Tau2Obs): boolean {
+  if (obs.hung) return false;
+  const hit = obs.nSuccessProxy === 1;
+  const arm = obs.arm ?? (hit ? "wait" : "I_loop");
+  return hit && arm === "wait";
+}
+
+export function episodeTaskId(obs: Tau2Obs, index: number, taskIds?: string[]): string {
+  if (obs.taskId && obs.taskId.length > 0) return obs.taskId;
+  const fromList = taskIds?.[index];
+  if (fromList && fromList.length > 0) return fromList;
+  return String(index);
+}
+
+/**
+ * Split a batch so a global C mutation cannot land on wait+hit episodes.
+ * Optional patchTaskIds scopes C1 further (wait-hit is never included).
+ */
+export function computeApplyScope(
+  obs?: Tau2Obs | Tau2Obs[] | null,
+  opts?: { patchTaskIds?: string[]; taskIds?: string[] },
+): ApplyScope {
+  const list = asObsList(obs);
+  const hits = new Set<string>();
+  const order: string[] = [];
+  for (let i = 0; i < list.length; i++) {
+    const id = episodeTaskId(list[i]!, i, opts?.taskIds);
+    if (!order.includes(id)) order.push(id);
+    if (isWaitHit(list[i]!)) hits.add(id);
+  }
+  const scoped = (opts?.patchTaskIds ?? []).filter((id) => id.length > 0);
+  const waitKept: string[] = [];
+  const looped: string[] = [];
+  for (const id of order) {
+    if (hits.has(id)) {
+      waitKept.push(id);
+      continue;
+    }
+    if (scoped.length > 0 && !scoped.includes(id)) {
+      waitKept.push(id);
+      continue;
+    }
+    looped.push(id);
+  }
+  return { waitKept, looped };
+}
+
+export function graphsByApplyScope(
+  graphBefore: AgentGraph,
+  graphAfter: AgentGraph,
+  scope: ApplyScope,
+): Record<string, AgentGraph> {
+  const out: Record<string, AgentGraph> = {};
+  for (const id of scope.waitKept) out[id] = graphBefore;
+  for (const id of scope.looped) out[id] = graphAfter;
+  return out;
+}
+
+export function graphForScopedTask(
+  graphBefore: AgentGraph,
+  graphAfter: AgentGraph,
+  scope: ApplyScope,
+  taskId: string,
+): AgentGraph {
+  if (scope.waitKept.includes(taskId)) return graphBefore;
+  if (scope.looped.includes(taskId)) return graphAfter;
+  if (scope.waitKept.length > 0) return graphBefore;
+  return graphAfter;
+}
+
+/** Serving pick: never silently hand C1 to a wait+hit (or an unknown id in a mixed batch). */
+export function selectServingGraph(opts: {
+  taskId?: string;
+  reqGraph?: AgentGraph;
+  currentGraph: AgentGraph;
+  graphBefore: AgentGraph;
+  graphAfter?: AgentGraph;
+  applyScope?: ApplyScope;
+}): AgentGraph {
+  if (opts.reqGraph) return opts.reqGraph;
+  const scope = opts.applyScope;
+  if (opts.taskId && scope) {
+    if (scope.waitKept.includes(opts.taskId)) return opts.graphBefore;
+    if (scope.looped.includes(opts.taskId) && opts.graphAfter) return opts.graphAfter;
+  }
+  if (scope && scope.waitKept.length > 0) return opts.graphBefore;
+  return opts.currentGraph;
+}
+
+export function servingTechnique(
+  live: AgentGraph,
+  opts: {
+    taskId?: string;
+    applyScope?: ApplyScope;
+    reqTechnique?: Tau2Technique;
+    currentTechnique: Tau2Technique;
+  },
+): Tau2Technique {
+  const scope = opts.applyScope;
+  const scoped =
+    Boolean(opts.taskId) &&
+    Boolean(scope) &&
+    (scope!.waitKept.includes(opts.taskId!) || scope!.looped.includes(opts.taskId!));
+  if (scoped || live.meta?.selfEdit === true || (scope && scope.waitKept.length > 0 && !opts.taskId)) {
+    return techniqueOfGraph(live);
+  }
+  return opts.reqTechnique ?? opts.currentTechnique;
+}
+
 export function loopExhausted(g: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): boolean {
   if (graphHas(g, "policy-checklist")) return true;
   if (obsNeedsPolicy(obs)) return false;
@@ -51,8 +172,8 @@ export function loopExhausted(g: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): boolean
 
 export function obsNeedsPolicy(obs?: Tau2Obs | Tau2Obs[] | null): boolean {
   if (!obs) return false;
-  const list = Array.isArray(obs) ? obs : [obs];
-  return list.some((o) => shouldRecommendPolicy(o));
+  const list = asObsList(obs);
+  return list.some((o) => !isWaitHit(o) && shouldRecommendPolicy(o));
 }
 
 export function recommendIntervention(
@@ -148,34 +269,48 @@ export function techniqueOfGraph(g: AgentGraph): Tau2Technique {
 export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoopResult {
   const graphBefore = start ?? tau2Graph("one-shot");
   const techniqueBefore = techniqueOfGraph(graphBefore);
+  const applyScope = computeApplyScope(obs);
   let graphAfter: AgentGraph;
   let techniqueAfter: Tau2Technique;
   let applied = true;
+  let rationale: string;
 
-  if (obsNeedsPolicy(obs) && !graphHas(graphBefore, "policy-checklist")) {
+  if (applyScope.waitKept.length > 0 && applyScope.looped.length === 0 && asObsList(obs).length > 0) {
+    graphAfter = graphBefore;
+    techniqueAfter = techniqueBefore;
+    applied = false;
+    rationale = REFUSED_GLOBAL_ILOOP;
+  } else if (obsNeedsPolicy(obs) && !graphHas(graphBefore, "policy-checklist")) {
     graphAfter = applyPolicyChecklistMutation(graphBefore, AIRLINE_POLICY_CHECKLIST);
     techniqueAfter = "policy-checklist";
+    rationale = "host I_loop ladder";
   } else if (obsNeedsPolicy(obs)) {
     graphAfter = graphBefore;
     techniqueAfter = techniqueBefore;
     applied = false;
+    rationale = "host I_loop exhausted";
   } else if (!graphHas(graphBefore, "critic")) {
     graphAfter = applySelfRefineMutation(graphBefore);
     techniqueAfter = "self-refine";
+    rationale = "host I_loop ladder";
   } else if (!graphHas(graphBefore, "validator")) {
     graphAfter = applyValidatorMutation(graphBefore);
     techniqueAfter = "validator";
+    rationale = "host I_loop ladder";
   } else {
     graphAfter = graphBefore;
     techniqueAfter = techniqueBefore;
     applied = false;
+    rationale = "host I_loop exhausted";
   }
 
-  graphAfter.meta = {
-    ...(graphAfter.meta ?? {}),
-    technique: techniqueAfter,
-    intervention: applied ? "I_loop" : "exhausted",
-  };
+  if (applied) {
+    graphAfter.meta = {
+      ...(graphAfter.meta ?? {}),
+      technique: techniqueAfter,
+      intervention: "I_loop",
+    };
+  }
   const rec = reconcile(graphBefore, graphAfter);
   return {
     arm: "I_loop",
@@ -186,8 +321,9 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
     graphAfter,
     graphDiff: diffOps(rec.ops),
     path: "fallback",
-    action: "I_loop",
-    rationale: applied ? "host I_loop ladder" : "host I_loop exhausted",
+    action: applied ? "I_loop" : applyScope.waitKept.length > 0 && applyScope.looped.length === 0 ? "wait" : "I_loop",
+    rationale,
+    applyScope,
   };
 }
 

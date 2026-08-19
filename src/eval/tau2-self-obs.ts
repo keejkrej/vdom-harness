@@ -3,12 +3,14 @@ import { createProvider, type Provider } from "../providers.js";
 import { reconcile } from "../reconciler.js";
 import {
   applyILoop,
+  computeApplyScope,
   diffOps,
+  REFUSED_GLOBAL_ILOOP,
   techniqueOfGraph,
   type ILoopResult,
 } from "./tau2-improve.js";
 import { serializeKernelC, sanitizeGraphText, stripGoldIds, missedToolNamesOnly } from "./tau2-kernel.js";
-import { type Tau2Obs, type Tau2Technique } from "./tau2-types.js";
+import { type ApplyScope, type Tau2Obs, type Tau2Technique } from "./tau2-types.js";
 
 export type GraphPatchNode = {
   key: string;
@@ -22,6 +24,8 @@ export type GraphPatchNode = {
 export type GraphPatch = {
   technique?: Tau2Technique;
   nodes?: GraphPatchNode[];
+  /** If set, C1 applies only to these task ids. Wait-hit is never included. */
+  taskIds?: string[];
 };
 
 export type SelfObsDecision = {
@@ -37,6 +41,7 @@ export type SelfObsInput = {
   rewards?: Array<number | null>;
   terminations?: string[];
   missedToolNames?: string[];
+  taskIds?: string[];
   obs?: Tau2Obs | Tau2Obs[];
   provider?: Provider;
   model?: string;
@@ -48,6 +53,7 @@ export type SelfObsResult = ILoopResult & {
   rationale?: string;
   servingPaused: false;
   raw?: string;
+  applyScope?: ApplyScope;
 };
 
 const PATCH_ROLES = new Set(["critic", "refine", "validator", "policy", "policy-checklist"]);
@@ -57,11 +63,19 @@ const PATCH_ROLES = new Set(["critic", "refine", "validator", "policy", "policy-
  * measure misses; wait when it hits. Do not invent reservation IDs. Do not
  * transfer the rewrite to a hidden host script.
  */
+export const SELF_OBS_WAIT_HIT_RULES = `Each episode lists taskId, reward, arm, hung, and write tool names (never reservation IDs).
+If arm is wait and reward is 1, do not infer a missed cancel/update for that task.
+Do not mount a cancel-always / upgrade-always node that applies to wait-hit tasks.
+If you cannot write a gated patch (graphPatch.taskIds that leave wait-hit tasks on C0), return {"action":"wait"}.
+Never include reservation IDs in the patch.
+A mixed batch (wait-hit plus miss) must not apply a global C mutation to the wait-hit tasks.`;
+
 export const SELF_OBS_SYSTEM = `You are observing your own AgentGraph — kernel C — on the slow clock.
 You may change your own AgentGraph when the path measure misses; wait when it hits.
 Do not invent reservation IDs.
 Do not transfer the rewrite to a hidden host script.
-Return only JSON of the form {"action":"wait"|"I_loop","graphPatch":{"technique":"self-refine"|"validator"|"policy-checklist","nodes":[{"key":"...","role":"critic"|"refine"|"validator"|"policy","kind":"policy","objective":"...","prompt":"...","parentKey":"..."}]},"rationale":"..."}.
+${SELF_OBS_WAIT_HIT_RULES}
+Return only JSON of the form {"action":"wait"|"I_loop","graphPatch":{"technique":"self-refine"|"validator"|"policy-checklist","taskIds":["miss-task-id"],"nodes":[{"key":"...","role":"critic"|"refine"|"validator"|"policy","kind":"policy","objective":"...","prompt":"...","parentKey":"..."}]},"rationale":"..."}.
 If action is I_loop, you write the new critic/refine/validator/policy node prompt text yourself from this graph and these traces. The host must not fill a canned checklist for you.`;
 
 function obsList(obs?: Tau2Obs | Tau2Obs[] | null): Tau2Obs[] {
@@ -97,18 +111,63 @@ function compactTraces(traces?: Array<Trace | Record<string, unknown>>): string 
     .join("\n");
 }
 
+function writeToolNames(obs: Tau2Obs): string {
+  const names = (obs.lastActions ?? [])
+    .filter((a) => a && !a.startsWith("text:"))
+    .map((a) => stripGoldIds(a));
+  return [...new Set(names)].join(", ") || "none";
+}
+
+export function episodesFromInput(input: SelfObsInput): Tau2Obs[] {
+  const list = obsList(input.obs).map((o, i) => ({
+    ...o,
+    taskId: o.taskId || input.taskIds?.[i],
+  }));
+  if (list.length > 0) return list;
+  const rewards = input.rewards ?? [];
+  return rewards.map((r, i) => {
+    const hit = r != null && r >= 1 - 1e-6;
+    return {
+      nSteps: 0,
+      nSuccessProxy: hit ? 1 : 0,
+      lastActions: [],
+      channels: [],
+      critique: "",
+      toolFailures: 0,
+      repeatActions: 0,
+      arm: hit ? "wait" : "I_loop",
+      hung: false,
+      taskId: input.taskIds?.[i],
+    } satisfies Tau2Obs;
+  });
+}
+
+function formatEpisodes(input: SelfObsInput): string {
+  const episodes = episodesFromInput(input);
+  if (episodes.length === 0) return "";
+  const lines = episodes.map((o, i) => {
+    const id = o.taskId || String(i);
+    const reward = o.nSuccessProxy;
+    const arm = o.arm ?? (reward === 1 ? "wait" : "I_loop");
+    return `- taskId=${id} reward=${reward} arm=${arm} hung=${Boolean(o.hung)} writeTools=${writeToolNames(o)}`;
+  });
+  return `Episodes:\n${lines.join("\n")}\n${SELF_OBS_WAIT_HIT_RULES}`;
+}
+
 export function formatSelfObsUser(input: SelfObsInput): string {
   const rewards = rewardBits(input);
   const terms = (input.terminations ?? []).map(normalizeTermination);
-  const fromObs = obsList(input.obs).flatMap((o) => missedToolNamesOnly(o.missedActions));
+  const episodes = episodesFromInput(input);
+  const fromObs = episodes.flatMap((o) => missedToolNamesOnly(o.missedActions));
   const missed = [...new Set([...(input.missedToolNames ?? []), ...fromObs])];
   const tools = [...new Set(input.toolNames ?? [])];
   const traces = compactTraces(input.traces);
-  const lastActions = obsList(input.obs).flatMap((o) => o.lastActions ?? []);
+  const lastActions = episodes.flatMap((o) => o.lastActions ?? []);
   return [
     "Current kernel C:",
     serializeKernelC(input.graph),
     "",
+    formatEpisodes(input),
     `Official reward (0/1): ${rewards.length > 0 ? rewards.join(",") : "unknown"}`,
     `Termination (user_stop|transfer|timeout): ${terms.join(",") || "unknown"}`,
     `Tool names used: ${tools.length > 0 ? tools.join(", ") : lastActions.filter((a) => !a.startsWith("text:")).join(", ") || "none"}`,
@@ -131,6 +190,15 @@ export function parseSelfObsJson(raw: string): SelfObsDecision | undefined {
     const patch = obj.graphPatch;
     const graphPatch =
       patch && typeof patch === "object" && !Array.isArray(patch) ? (patch as GraphPatch) : undefined;
+    if (graphPatch && !graphPatch.taskIds) {
+      const topIds = obj.taskIds;
+      if (Array.isArray(topIds)) {
+        graphPatch.taskIds = topIds.filter((x): x is string => typeof x === "string");
+      }
+    }
+    if (graphPatch?.taskIds) {
+      graphPatch.taskIds = graphPatch.taskIds.filter((x) => typeof x === "string" && x.length > 0);
+    }
     return {
       action: obj.action,
       graphPatch,
@@ -211,6 +279,7 @@ function waitResult(
   path: "self" | "fallback",
   rationale?: string,
   raw?: string,
+  applyScope?: ApplyScope,
 ): SelfObsResult {
   const technique = techniqueOfGraph(graphBefore);
   return {
@@ -226,18 +295,25 @@ function waitResult(
     rationale,
     servingPaused: false,
     raw,
+    applyScope,
   };
 }
 
-function withFallback(graphBefore: AgentGraph, obs: SelfObsInput["obs"], rationale: string, raw?: string): SelfObsResult {
-  const fallback = applyILoop(graphBefore, obs);
+function withFallback(
+  graphBefore: AgentGraph,
+  input: SelfObsInput,
+  rationale: string,
+  raw?: string,
+): SelfObsResult {
+  const fallback = applyILoop(graphBefore, episodesFromInput(input));
   return {
     ...fallback,
     path: "fallback",
-    action: fallback.applied ? "I_loop" : "I_loop",
-    rationale,
+    action: fallback.applied ? "I_loop" : fallback.action === "wait" ? "wait" : "I_loop",
+    rationale: fallback.rationale === REFUSED_GLOBAL_ILOOP ? REFUSED_GLOBAL_ILOOP : rationale,
     servingPaused: false,
     raw,
+    applyScope: fallback.applyScope,
   };
 }
 
@@ -261,22 +337,31 @@ export async function runSelfObs(input: SelfObsInput): Promise<SelfObsResult> {
   } catch (err) {
     return withFallback(
       graphBefore,
-      input.obs,
+      input,
       `self-obs provider error; fallback (${err instanceof Error ? err.message : "error"})`,
     );
   }
 
   const parsed = parseSelfObsJson(raw);
   if (!parsed) {
-    return withFallback(graphBefore, input.obs, "invalid self-obs JSON; fallback", raw);
+    return withFallback(graphBefore, input, "invalid self-obs JSON; fallback", raw);
   }
+  const episodes = episodesFromInput(input);
+  const applyScope = computeApplyScope(episodes, {
+    patchTaskIds: parsed.graphPatch?.taskIds,
+    taskIds: input.taskIds,
+  });
   if (parsed.action === "wait") {
-    return waitResult(graphBefore, "self", parsed.rationale, raw);
+    return waitResult(graphBefore, "self", parsed.rationale, raw, applyScope);
+  }
+
+  if (applyScope.waitKept.length > 0 && applyScope.looped.length === 0 && episodes.length > 0) {
+    return waitResult(graphBefore, "self", REFUSED_GLOBAL_ILOOP, raw, applyScope);
   }
 
   const patched = applyGraphPatch(graphBefore, parsed.graphPatch);
   if (!patched) {
-    return withFallback(graphBefore, input.obs, parsed.rationale ?? "unusable graphPatch; fallback", raw);
+    return withFallback(graphBefore, input, parsed.rationale ?? "unusable graphPatch; fallback", raw);
   }
 
   const rec = reconcile(graphBefore, patched);
@@ -293,5 +378,6 @@ export async function runSelfObs(input: SelfObsInput): Promise<SelfObsResult> {
     rationale: parsed.rationale,
     servingPaused: false,
     raw,
+    applyScope,
   };
 }

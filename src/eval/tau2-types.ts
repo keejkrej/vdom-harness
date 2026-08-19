@@ -75,12 +75,20 @@ export type Tau2Obs = {
   repeatActions: number;
   /** Paper arm Obs should emit: I_loop | I_weight | wait */
   arm?: "I_loop" | "I_weight" | "wait";
+  /** Official task id. Required for per-task C on mixed wait-hit / miss batches. */
+  taskId?: string;
   missedActions?: Tau2MissedAction[];
   refusedCancel?: boolean;
   inventedPolicy?: boolean;
   hung?: boolean;
   /** Typed I_loop graph when the miss is a refused / never-called cancel or update. */
   techniqueRecommendation?: Tau2Technique;
+};
+
+/** Mixed-batch I_loop split: wait+hit keep C0; miss / I_loop get C1. */
+export type ApplyScope = {
+  waitKept: string[];
+  looped: string[];
 };
 
 export type Tau2SimulationLog = {
