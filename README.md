@@ -4,6 +4,8 @@ Pi customizes an agent. DSH composes a runtime. vdom reconciles a society that c
 
 A vdom agent **observes itself** — traces, scores, failures — and **reengineers itself**. It can mutate its AgentGraph (the loop), mount capabilities (harness / tools), or dispatch an **async** trainer and switch `f_θ` / adapters when an eval gate passes. It does this however it wants.
 
+The paper lives in [agent-stochastic-dynamics](https://github.com/keejkrej/agent-stochastic-dynamics) — theory, ICLR draft, typed kernel, OpenRouter traces. This repo is the accompanying runtime submitted with that paper: the self-observing agent that can reengineer its loop and dispatch async weight updates. vdom is not the paper.
+
 You do not `spawnAgent()`. You declare an AgentGraph. A reconciler diffs topology. The agent reads its own traces and emits a new graph, a capability, or an async weight job. Improvement does not patch the host runtime.
 
 Sources of "what to become" are untrusted text: papers, blogs, GitHub repos, X posts, other research agents, conversation, traces. A compiler turns some of that into a graph. That compiler is a convenience, not the product.
@@ -31,8 +33,6 @@ They emit a virtual agent graph. A reconciler diffs desired vs current topology 
       -> traces + scores -> observe / fail -> new graph | capability | async trainer
 
 The IR is plain objects (JSX in comments is fine). A node is the primitive; an agent is one executor kind.
-
-Companion notes on self-observation and dual intervention: [agent-stochastic-dynamics](https://github.com/keejkrej/agent-stochastic-dynamics).
 
 ## Run
 
