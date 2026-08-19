@@ -3,6 +3,7 @@ import {
   type Completion,
   type Message,
   type Provider,
+  type ToolCallOut,
   type ToolSpec,
   createProvider,
 } from "../providers.js";
