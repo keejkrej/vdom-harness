@@ -45,6 +45,29 @@ export function tau2Graph(technique: Tau2Technique = "one-shot", model?: string)
     });
   }
 
+  if (technique === "validator") {
+    const sr = tau2Graph("self-refine", model);
+    return graph({
+      id: "tau2-validator",
+      version: sr.version + 1,
+      meta: { paper: "Self-Refine", technique: "validator", benchmark: "tau2-bench" },
+      root: {
+        ...sr.root,
+        technique: "validator",
+        children: [
+          ...(sr.root.children ?? []),
+          node({
+            key: "validator",
+            role: "validator",
+            objective: "Forbid the last failed action; transfer when policy requires a human",
+            technique: "validator",
+            model,
+          }),
+        ],
+      },
+    });
+  }
+
   if (technique === "reflexion") {
     return graph({
       id: "tau2-reflexion",

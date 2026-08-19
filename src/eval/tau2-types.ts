@@ -4,7 +4,7 @@ import { type Completion, type Message, type ToolSpec } from "../providers.js";
 export const TAU2_PAPER_REPO = "https://github.com/keejkrej/agent-stochastic-dynamics";
 export const TAU2_BENCH_REPO = "https://github.com/sierra-research/tau2-bench";
 
-export type Tau2Technique = "one-shot" | "self-refine" | "reflexion";
+export type Tau2Technique = "one-shot" | "self-refine" | "reflexion" | "validator";
 
 export type Tau2TurnRequest = {
   op: "turn";
@@ -44,6 +44,8 @@ export type Tau2Obs = {
   critique: string;
   toolFailures: number;
   repeatActions: number;
+  /** Paper arm Obs should emit: I_loop | I_weight | wait */
+  arm?: "I_loop" | "I_weight" | "wait";
 };
 
 export type Tau2SimulationLog = {

@@ -93,12 +93,16 @@ def _obs(actions: list[dict[str, Any]], reward: float | None, traces: list[Any])
     p_hit = 1 if reward is not None and reward >= 1 - 1e-6 else 0
     if p_hit:
         critique = "path measure hits S; wait"
+        arm = "wait"
     elif failures:
         critique = "tool failures in trajectory; inspect env channel"
+        arm = "I_loop"
     elif repeats:
         critique = "repeat actions; loop mutation or wait"
+        arm = "I_loop"
     else:
         critique = "episode unfinished or miss; inspect cascade / tools"
+        arm = "I_loop"
     return {
         "nSteps": max(len(traces), len(actions)),
         "nSuccessProxy": p_hit,
@@ -107,6 +111,7 @@ def _obs(actions: list[dict[str, Any]], reward: float | None, traces: list[Any])
         "critique": critique,
         "toolFailures": failures,
         "repeatActions": repeats,
+        "arm": arm,
     }
 
 
@@ -122,10 +127,13 @@ def write_eval_file(
     pass_hat_k: dict[str, float] | None,
     avg_reward: float | None,
     extra_traces: dict[str, list] | None = None,
+    tag: str | None = None,
 ) -> Path:
     EVAL_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     kind = "smoke" if smoke else ("live" if live else "offline")
+    if tag:
+        kind = f"{kind}-{tag}"
     path = EVAL_DIR / f"{domain}-{kind}-{stamp}.json"
 
     logs = []

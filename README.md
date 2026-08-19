@@ -60,6 +60,8 @@ Without a key, the deterministic provider stays active.
 
 ## Evaluation
 
+The result this repo claims is a **closed loop**: self-observe → `I_loop` or `I_weight` → run again → self-observe, until `pass^k` saturates or a round budget. Not a static one-shot τ² score and not a single before/after. Serving does not pause. The 5×4 retail one-shot slice on tasks 0–4 scored `pass^k=1.0` — that slice is saturated and cannot show improvement; do not lead with it.
+
 Toys in `src/benchmarks.ts` (word-reverse, and friends) are **unit fixtures**. They prove the reconciler and DeterministicProvider, not the agent. The paper that accompanies this runtime is [agent-stochastic-dynamics](https://github.com/keejkrej/agent-stochastic-dynamics). This repo is the submitted runtime.
 
 Established tool–agent–user eval is **[τ²-bench](https://github.com/sierra-research/tau2-bench)** (Yao et al. 2024; Barres et al. 2025). We implement their `HalfDuplexAgent` (`python/tau2_vdom/`) and keep the TypeScript AgentGraph. Each turn calls `runTau2Turn` → `complete()` / `completeTurn()`; official tau2 owns domains, tools, user simulator, orchestrator, and `pass^k`. We do not reimplement retail.
@@ -71,20 +73,35 @@ npm test
 # Official mock-domain smoke (no key). Installs nothing if tau2 is present.
 bash scripts/setup-tau2.sh
 npm run eval:tau2:smoke
+
+# Closed loop (no key): observe → I_loop → observe → I_loop → observe
+# until pass^k saturates. Mock uses update_task_1 + impossible_task_1
+# so two rounds actually change p_hit (0 → 0.5 → 1.0).
+PYTHONPATH=python python3 -m tau2_vdom.improve
+npm run eval:tau2:improve
 ```
 
-Live retail, OpenRouter, default model `deepseek/deepseek-v4-flash-0731` (not the 0424 preview):
+`eval/tau2/latest-improve.json` records the **sequence** of rounds: `pHit` / `passHatK` / `taskPHit`, Obs, intervention, and graph diff per round. Scores are not invented. If a live slice is already 1.0 under the naive graph, the report stops after the first Obs (`stopReason: saturated`).
+
+Live self-improvement (needs a key). Default live domain is **airline**, or retail **held-out** tasks 5–9 — not retail 0–4:
 
 ```
 export OPENROUTER_API_KEY=...
 export OPENAI_BASE_URL=https://openrouter.ai/api/v1
 export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
+PYTHONPATH=python python3 -m tau2_vdom.improve --domain airline --num-tasks 4 --num-trials 1
+PYTHONPATH=python python3 -m tau2_vdom.improve --domain retail --task-ids 5 6 7 8 9 --num-trials 1
+```
+
+One-shot retail slice (saturated; not the claim):
+
+```
 PYTHONPATH=python python3 -m tau2_vdom --domain retail --num-tasks 5 --num-trials 4
 ```
 
-The runner registers `--agent vdom` on the official tau2 registry, then calls `run_domain` / `run_single_task`. Use `python -m tau2_vdom` (not a stock `tau2 run`) so the factory is imported.
+The runner registers `--agent vdom` on the official tau2 registry, then calls `run_domain` / `run_single_task`. Use `python -m tau2_vdom` / `python -m tau2_vdom.improve` (not a stock `tau2 run`) so the factory is imported.
 
-Trajectories (actions, tool failures, repeats, reward, `obs` for the paper's `p_hit`) write to `eval/tau2/*.json`. `pass^k` is copied from tau2's `compute_metrics` when a live run finishes — this harness does not invent scores.
+Trajectories (actions, tool failures, repeats, reward, `obs` for the paper's `p_hit`) write to `eval/tau2/*.json`. `pass^k` is computed from measured rewards with the official `C(c,k)/C(n,k)` estimator — this harness does not invent scores.
 
 ## Limitation
 
@@ -110,8 +127,8 @@ Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
 - src/runtime.ts -- walk the mounted graph, collect traces
 - src/papers.ts -- source text to graph (`compilePaper` / `compileSource`)
 - src/benchmarks.ts -- word-reverse fixtures (not the paper eval)
-- src/eval/ -- τ² turn loop, sidecar, Obs logs
-- python/tau2_vdom/ -- official HalfDuplexAgent + runner
+- src/eval/ -- τ² turn loop, sidecar, Obs, I_loop / I_weight gate
+- python/tau2_vdom/ -- official HalfDuplexAgent + runner + `python -m tau2_vdom.improve`
 - src/scientist.ts -- evolve the graph from traces
 - src/capability.ts -- approved capability registry + sandbox gate
 - src/trainer.ts -- Trainer port, FakeTrainer, adapter artifacts
@@ -126,4 +143,5 @@ Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
 package.json defines demo, test, build, export, and viz. After installing packages: test then demo.
 
     npm i && npm test && npm run demo
-    npm run eval:tau2:smoke   # official τ² mock domain, no API key
+    npm run eval:tau2:smoke     # official τ² mock create_task_1, no API key
+    npm run eval:tau2:improve   # naive → Obs → I_loop → same tasks (update_task_1)

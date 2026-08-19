@@ -1,0 +1,267 @@
+{
+  "benchmark": "tau2-bench",
+  "kind": "runtime-self-improvement",
+  "closedLoop": true,
+  "claim": "Closed loop: self-observe \u2192 I_loop or I_weight \u2192 run again \u2192 self-observe, until pass^k saturates or the round budget. Serving does not pause. Not the saturated 5\u00d74 retail one-shot pass^k=1.0.",
+  "note": "Closed loop: self-observe \u2192 I_loop or I_weight \u2192 run again \u2192 self-observe, until pass^k saturates or the round budget. Serving does not pause. Not the saturated 5\u00d74 retail one-shot pass^k=1.0.",
+  "paperRepo": "https://github.com/keejkrej/agent-stochastic-dynamics",
+  "tau2Repo": "https://github.com/sierra-research/tau2-bench",
+  "metricNote": "pass^k is reliability across k independent trials (Yao et al. 2024; Barres et al. 2025). The accompanying paper treats pass^k as first-passage p_hit.",
+  "domain": "mock",
+  "taskIds": [
+    "update_task_1",
+    "impossible_task_1"
+  ],
+  "numTrials": 1,
+  "maxRounds": 4,
+  "stopReason": "saturated",
+  "agent": "vdom",
+  "model": "deterministic",
+  "provider": "deterministic",
+  "live": false,
+  "passHatKBefore": {
+    "1": 0.0
+  },
+  "passHatKAfter": {
+    "1": 1.0
+  },
+  "pHitSequence": [
+    0.0,
+    0.5,
+    1.0
+  ],
+  "avgRewardBefore": 0.0,
+  "avgRewardAfter": 1.0,
+  "interventions": [
+    "I_loop",
+    "I_loop"
+  ],
+  "graphDiffs": [
+    [
+      {
+        "op": "retain",
+        "key": "solve"
+      },
+      {
+        "op": "mount",
+        "key": "critic",
+        "parentKey": "solve"
+      },
+      {
+        "op": "mount",
+        "key": "refine",
+        "parentKey": "critic"
+      }
+    ],
+    [
+      {
+        "op": "retain",
+        "key": "solve"
+      },
+      {
+        "op": "retain",
+        "key": "critic",
+        "parentKey": "solve"
+      },
+      {
+        "op": "retain",
+        "key": "refine",
+        "parentKey": "critic"
+      },
+      {
+        "op": "mount",
+        "key": "validator",
+        "parentKey": "solve"
+      }
+    ]
+  ],
+  "rounds": [
+    {
+      "round": 0,
+      "technique": "one-shot",
+      "pHit": 0.0,
+      "passHatK": {
+        "1": 0.0
+      },
+      "avgReward": 0.0,
+      "taskPHit": {
+        "update_task_1": 0.0,
+        "impossible_task_1": 0.0
+      },
+      "obs": [
+        {
+          "nSteps": 3,
+          "nSuccessProxy": 0,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "create_task",
+            "text:The task was created successfully."
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "episode unfinished or miss; inspect cascade / tools",
+          "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "I_loop"
+        },
+        {
+          "nSteps": 3,
+          "nSuccessProxy": 0,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "create_task",
+            "text:The task was created successfully."
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "episode unfinished or miss; inspect cascade / tools",
+          "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "I_loop"
+        }
+      ],
+      "intervention": null,
+      "graphDiff": [],
+      "evalFile": "eval/tau2/mock-offline-one-shot-r1787130274-20260819T090434Z.json"
+    },
+    {
+      "round": 1,
+      "technique": "self-refine",
+      "pHit": 0.5,
+      "passHatK": {
+        "1": 0.5
+      },
+      "avgReward": 0.5,
+      "taskPHit": {
+        "update_task_1": 1.0,
+        "impossible_task_1": 0.0
+      },
+      "obs": [
+        {
+          "nSteps": 3,
+          "nSuccessProxy": 1,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "update_task_status",
+            "text:The task status was updated successfully."
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "path measure hits S; wait",
+          "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "wait"
+        },
+        {
+          "nSteps": 3,
+          "nSuccessProxy": 0,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "create_task",
+            "text:The task was created successfully."
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "episode unfinished or miss; inspect cascade / tools",
+          "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "I_loop"
+        }
+      ],
+      "intervention": "I_loop",
+      "graphDiff": [
+        {
+          "op": "retain",
+          "key": "solve"
+        },
+        {
+          "op": "mount",
+          "key": "critic",
+          "parentKey": "solve"
+        },
+        {
+          "op": "mount",
+          "key": "refine",
+          "parentKey": "critic"
+        }
+      ],
+      "evalFile": "eval/tau2/mock-offline-self-refine-r1787130274-20260819T090434Z.json"
+    },
+    {
+      "round": 2,
+      "technique": "validator",
+      "pHit": 1.0,
+      "passHatK": {
+        "1": 1.0
+      },
+      "avgReward": 1.0,
+      "taskPHit": {
+        "update_task_1": 1.0,
+        "impossible_task_1": 1.0
+      },
+      "obs": [
+        {
+          "nSteps": 3,
+          "nSuccessProxy": 1,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "update_task_status",
+            "text:The task status was updated successfully."
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "path measure hits S; wait",
+          "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "wait"
+        },
+        {
+          "nSteps": 3,
+          "nSuccessProxy": 1,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "transfer_to_human_agents",
+            "text:I transferred you to a human agent."
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "path measure hits S; wait",
+          "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "wait"
+        }
+      ],
+      "intervention": "I_loop",
+      "graphDiff": [
+        {
+          "op": "retain",
+          "key": "solve"
+        },
+        {
+          "op": "retain",
+          "key": "critic",
+          "parentKey": "solve"
+        },
+        {
+          "op": "retain",
+          "key": "refine",
+          "parentKey": "critic"
+        },
+        {
+          "op": "mount",
+          "key": "validator",
+          "parentKey": "solve"
+        }
+      ],
+      "evalFile": "eval/tau2/mock-offline-validator-r1787130274-20260819T090434Z.json"
+    }
+  ],
+  "servingPaused": false,
+  "command": "PYTHONPATH=python python3 -m tau2_vdom.improve"
+}
