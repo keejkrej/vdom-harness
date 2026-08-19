@@ -103,6 +103,20 @@ def test_skipped_task_stays_in_task_phit() -> None:
     assert hat["1"] == (0.0 + 0.0) / 2
 
 
+def test_obs_personal_reason_is_invented_policy() -> None:
+    actions = [
+        {
+            "kind": "text",
+            "text": "I cannot cancel this economy reservation; a personal reason is not covered.",
+            "ok": True,
+        }
+    ]
+    obs = _obs(actions, 0.0, [])
+    assert obs["inventedPolicy"] is True
+    assert obs["refusedCancel"] is True
+    assert obs["techniqueRecommendation"] == "policy-checklist"
+
+
 def test_hit_still_waits() -> None:
     obs = _obs(
         [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
@@ -120,6 +134,7 @@ def main() -> int:
         test_obs_mock_update_does_not_select_policy,
         test_obs_hung_keeps_task,
         test_skipped_task_stays_in_task_phit,
+        test_obs_personal_reason_is_invented_policy,
         test_hit_still_waits,
     ]
     failed = 0

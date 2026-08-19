@@ -51,13 +51,15 @@ Finished: 2026-08-19 14:11 CEST. Compact: `improve-live-0731.json`.
 
 `stopReason: loop-exhausted`. `servingPaused: false`. I_loop did **not** raise p_hit vs naive one-shot. Round-1 0.0 is a smaller denominator (task 41 skipped). Tasks 39 and 44 stayed 0.0. Not invented.
 
-Gold (follow this, not the live refusal narrative):
+Airline `reward_basis` is DB × COMMUNICATE (`communicate_info` is `[]` on 39/44), so score 0 is a DB miss. ACTION / `nl_assertions` are diagnostics only.
 
-- Task 39 expected `cancel_reservation` on **8C8K4E, LU15PA, MSJ4OA** only. Refusing UDMOP1 / XAZ3C0 is correct (basic economy, no insurance). The miss is MSJ4OA never cancelled.
-- Task 44 gold does **not** cancel S61CZX (user is healthy, insurance does not apply). Expected writes are `update_reservation_flights` on NM1VX1, H8Q05L, **KC18K6**. The miss is the third upgrade.
-- Task 41 gold: check reservations, cancel none. Already hits.
+Gold (from `.tau2-bench/data/tau2/domains/airline/tasks.json`; the policy node encodes **rules**, never these IDs):
 
-The next I_loop arm is `policy-checklist`: if Obs sees `refusedCancel` / a missed `cancel_reservation` or `update_reservation_*`, mount a policy critic grounded in `airline/policy.md` instead of another generic self-refine. Hung trials retry once and stay in `taskPHit` as null rather than disappearing. This arm is not a measured p_hit win until the parent re-runs live 0731.
+- Task 39: cancel every eligible reservation (business, or economy + insurance). Do not invent a “personal reason” block on insured economy. Do not cancel basic economy without insurance, or anything already / partially flown. Extra ineligible cancels also zero the DB.
+- Task 44: if the user is healthy, insurance does not apply — refuse that economy cancel. Then complete **every** eligible cabin upgrade (`update_reservation_flights`). Cancelling the ineligible reservation zeros the score. Do not force-cancel it.
+- Task 41: check reservations, cancel none. Already hits.
+
+The next I_loop arm is `policy-checklist`: if Obs sees `refusedCancel` / a missed `cancel_reservation` or `update_reservation_*`, mount that policy critic instead of another generic self-refine. Hung trials retry once and stay in `taskPHit` as null rather than disappearing. This arm is not a measured p_hit win until the parent re-runs live 0731.
 
 Probe (one-shot, same model): airline 0/1/2 all hit 1.0 (too easy); 23 and 18 hit; 39, 44, 41 missed (41 later hit on the loop's one-shot trial).
 

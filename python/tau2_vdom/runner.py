@@ -42,7 +42,9 @@ _REFUSE_CANCEL = re.compile(
 _INVENTED_POLICY = re.compile(
     r"no-?show|no mechanism|i have no (?:way|mechanism)|"
     r"there is no way for me to|not possible to (?:make|process) (?:a )?no-?show|"
-    r"i have no (?:tool|api) to cancel",
+    r"i have no (?:tool|api) to cancel|personal reason|"
+    r"change of plan is not (?:covered|eligible)|"
+    r"not a (?:valid|covered) (?:personal )?reason",
     re.I,
 )
 
@@ -202,7 +204,8 @@ def _missed_actions_from_reward_info(reward_info: Any) -> list[dict[str, Any]]:
 
 
 def serialize_reward_info(reward_info: Any) -> dict[str, Any] | None:
-    """Persist tau2 RewardInfo fields Obs needs: checks + which expected tools missed."""
+    """Persist tau2 RewardInfo. On airline, ACTION / nl_assertions are diagnostics only
+    (reward_basis is DB × COMMUNICATE); still keep them so I_loop can see missed writes."""
     if reward_info is None:
         return None
     if hasattr(reward_info, "model_dump"):

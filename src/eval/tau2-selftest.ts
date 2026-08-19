@@ -375,9 +375,31 @@ async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
   );
   const policyNode = policy.graphAfter.root.children?.find((c) => c.key === "policy-checklist");
   assert(policyNode != null, "policy node present");
-  assert((policyNode?.objective ?? "").includes("last 24 hours"), "objective cites official 24h gate");
-  assert((policyNode?.prompt ?? "").includes("Do not stop after the first two"), "prompt says enumerate all");
-  assert(AIRLINE_POLICY_CHECKLIST.includes("business cabin"), "checklist is airline policy, not think harder");
+  const policyText = `${policyNode?.objective ?? ""}\n${policyNode?.prompt ?? ""}\n${AIRLINE_POLICY_CHECKLIST}`;
+  assert(policyText.includes("last 24 hours"), "objective cites official 24h gate");
+  assert(policyText.includes("Do not stop after the first two"), "prompt says enumerate all");
+  assert(policyText.includes("business cabin"), "checklist is airline policy, not think harder");
+  assert(
+    policyText.includes("Economy + travel insurance is eligible"),
+    "insured economy is eligible; no invented personal-reason block",
+  );
+  assert(
+    policyText.includes("Do not invent a \"personal reason\""),
+    "explicitly forbids a personal-reason refuse",
+  );
+  assert(
+    policyText.includes("If the user states they are healthy"),
+    "healthy user → insurance does not apply; refuse that cancel",
+  );
+  assert(
+    policyText.includes("refuse it, then continue: complete every eligible cabin upgrade"),
+    "after an ineligible cancel, finish every eligible upgrade",
+  );
+  assert(
+    !/S61CZX|MSJ4OA|8C8K4E|LU15PA|UDMOP1|XAZ3C0|I6M8JQ|4XGCCM|NM1VX1|H8Q05L|KC18K6/.test(policyText),
+    "policy encodes rules, never gold reservation IDs",
+  );
+  assert(!/force cancel/i.test(policyText), "does not force-cancel any reservation");
 
   const again = applyILoop(policy.graphAfter, obs);
   assertEq(again.applied, false, "second policy I_loop is exhausted");

@@ -16,6 +16,7 @@ export type Tau2MissedAction = {
   arguments?: Record<string, unknown>;
 };
 
+/** Persisted tau2 RewardInfo. On airline, ACTION / nl_assertions are diagnostics only. */
 export type Tau2RewardInfo = {
   reward?: number | null;
   action_checks?: Array<{
