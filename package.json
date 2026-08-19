@@ -1,7 +1,7 @@
 {
   "name": "vdom-harness",
   "version": "0.1.0",
-  "description": "A virtual DOM for agents: declare an AgentGraph, reconcile topology, execute.",
+  "description": "A virtual DOM for agents: a society that observes itself and rewrites its graph, capabilities, and adapters.",
   "type": "module",
   "scripts": {
     "demo": "tsx src/demo.ts",

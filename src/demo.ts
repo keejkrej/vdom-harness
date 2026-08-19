@@ -1,3 +1,8 @@
+/**
+ * Printed loop: compile two known sources (Self-Refine, Reflexion),
+ * then watch a failing one-shot observe itself and emit a new graph.
+ * Sources are not the product — the rewrite is.
+ */
 import { createProvider } from "./providers.js";
 import {
   compilePaper,
@@ -63,7 +68,7 @@ async function main(): Promise<void> {
   console.log("");
   if (process.env.OPENAI_API_KEY) {
     console.log(
-      "OPENAI_API_KEY is set — researchLoop can compile arbitrary paper text with a live model.",
+      "OPENAI_API_KEY is set — researchLoop can compile arbitrary source text with a live model.",
     );
   } else {
     console.log("No OPENAI_API_KEY — deterministic provider is active.");

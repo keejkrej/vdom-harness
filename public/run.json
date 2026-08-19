@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-17T06:39:51.349Z",
+  "generatedAt": "2026-08-19T07:33:11.147Z",
   "provider": "deterministic",
   "task": {
     "id": "word-reverse",
@@ -17,7 +17,7 @@
     {
       "t": 0,
       "type": "title",
-      "text": "Pi customizes an agent. DSH composes a runtime. vdom reconciles a society."
+      "text": "Pi customizes an agent. DSH composes a runtime. vdom reconciles a society that can rewrite itself."
     },
     {
       "t": 1400,

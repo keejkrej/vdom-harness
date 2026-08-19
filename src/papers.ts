@@ -1,3 +1,11 @@
+/**
+ * Source → graph compilers.
+ *
+ * Papers are the current compiled examples (Self-Refine, Reflexion).
+ * `compilePaper` / `compileSource` accept any untrusted text — blogs, repos,
+ * X posts, other agents, conversation, traces. Unknown sources fall through
+ * to a one-shot solve node. The compiler is a convenience, not the product.
+ */
 import { type AgentGraph, node, graph } from "./ir.js";
 
 export const SELF_REFINE_ABSTRACT = `
@@ -107,9 +115,17 @@ export function reflexionGraph(): AgentGraph {
   });
 }
 
+/**
+ * Compile untrusted source text into an AgentGraph.
+ * Known Self-Refine / Reflexion citations route to fixtures; everything
+ * else is a one-shot. Prefer `compileSource` in new call sites.
+ */
 export function compilePaper(text: string): AgentGraph {
   const t = text.toLowerCase();
   if (/self-refine|self refine|madaan/.test(t)) return selfRefineGraph();
   if (/reflexion|shinn/.test(t)) return reflexionGraph();
   return oneShotGraph();
 }
+
+/** Alias: papers are one source among blogs, repos, X, agents, traces. */
+export const compileSource = compilePaper;

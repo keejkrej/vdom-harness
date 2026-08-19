@@ -363,7 +363,7 @@
         hideHeroOps();
         els.nowName.textContent = ev.name;
         els.nowTech.textContent = ev.technique ?? "";
-        els.stageMeta.textContent = ev.technique ?? "paper";
+        els.stageMeta.textContent = ev.technique ?? "source";
         els.scientist.hidden = true;
         els.traceLog.textContent = "";
         els.graph.classList.add("reading");
@@ -426,7 +426,7 @@
         hideHeroOps();
         els.compare.classList.add("hot");
         els.nowName.textContent = "vdom";
-        els.nowTech.textContent = "reconcile a society";
+        els.nowTech.textContent = "reconcile a society that can rewrite itself";
         els.stageMeta.textContent = "Pi  DSH  vdom";
         break;
       default:
