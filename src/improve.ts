@@ -5,7 +5,14 @@ import { RuntimeDOM, reconcile, formatOps, type ReconcileResult } from "./reconc
 import { applySelfRefineMutation, evolveOnce } from "./scientist.js";
 import { oneShotGraph } from "./papers.js";
 import { proposeCapability } from "./capability.js";
-import { type Trainer, FakeTrainer } from "./trainer.js";
+import {
+  type Trainer,
+  FakeTrainer,
+  spawnTrainJob,
+  waitTrainJob,
+  recordTrainJobGate,
+  trainerKindOf,
+} from "./trainer.js";
 import {
   type GateDecision,
   gateCapability,
@@ -27,6 +34,12 @@ export type ImproveIter = {
  * Sibling to researchLoop: choose topology mutation, capability mount, or
  * adapter mount based on mode / traces. All non-topology paths go through
  * the eval gate before the live graph changes.
+ *
+ * Adapter / I_weight uses two clocks: serving keeps old θ (fast) while
+ * `spawnTrainJob` trains from incomplete traces (slow). The live graph
+ * changes only after `gateAdapter` / a held-out eval. servingPaused is never
+ * set. FakeTrainer is the protocol unit test; SurrogateTrainer is an explicit
+ * non-0731 θ (prompt-prefix stand-in), not a claimed API LoRA.
  */
 export async function improveLoop(opts: {
   task: Task;
@@ -107,11 +120,23 @@ export async function improveLoop(opts: {
       continue;
     }
 
-    // adapter
-    const artifact = await trainer.train(benchmark.traces, {
-      baseModel: opts.baseModel ?? "base",
-      technique: "fake-lora",
+    // adapter — slow clock. Fast clock is untouched (no serving pause).
+    const job = spawnTrainJob({
+      trainer,
+      traces: benchmark.traces,
+      trainOpts: {
+        baseModel: opts.baseModel ?? "base",
+        technique: trainerKindOf(trainer) === "surrogate" ? "surrogate-prefix" : "fake-lora",
+      },
+      persist: false,
     });
+    const finished = await waitTrainJob(job.id);
+    if (finished.status !== "done" || !finished.artifact) {
+      history.push({ mode: "adapter", graph: g, benchmark });
+      if (mode !== "auto") break;
+      continue;
+    }
+    const artifact = finished.artifact;
     const gate = await gateAdapter({
       base: g,
       artifact,
@@ -121,6 +146,17 @@ export async function improveLoop(opts: {
       threshold,
       dom,
     });
+    recordTrainJobGate(
+      finished.id,
+      {
+        arm: "I_weight",
+        action: gate.action === "mount" ? "mount" : "reject",
+        before: benchmark.score,
+        after: gate.score,
+        reason: gate.action === "mount" ? "held-out eval did not regress" : gate.reason,
+      },
+      false,
+    );
     g = gate.graph;
     history.push({ mode: "adapter", graph: g, benchmark, gate });
 

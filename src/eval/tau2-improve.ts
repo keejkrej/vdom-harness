@@ -185,8 +185,10 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
 }
 
 /**
- * I_weight eval gate. Mount only if the after-eval strictly beats before.
- * Serving keeps the old f_θ on reject. FakeTrainer is enough to exercise this.
+ * I_weight eval gate (slow clock). Mount only if the after-eval strictly beats
+ * before. Serving keeps the old f_θ on reject (`servingPaused` stays false).
+ * FakeTrainer exercises the protocol; a surrogate that cannot raise p_hit is
+ * an honest reject — never a claimed 0731 LoRA.
  */
 export function gateWeightMount(before: number, after: number): WeightGateDecision {
   if (after > before) {

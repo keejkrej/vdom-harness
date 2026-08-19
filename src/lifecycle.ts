@@ -193,6 +193,10 @@ export function attachAdapter(
 /**
  * Eval-gate an adapter: retarget model → bench → mount | reject.
  * On reject, the previous model pointer is preserved (no live mount).
+ *
+ * Slow clock of I_weight: the candidate is scored on a scratch DOM. The fast
+ * clock keeps serving old θ (`servingPaused` stays false). Mount only if the
+ * held-out score does not regress; otherwise reject and keep the live graph.
  */
 export async function gateAdapter(opts: {
   base: AgentGraph;
