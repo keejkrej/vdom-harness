@@ -29,6 +29,32 @@ export function applySelfRefineMutation(g: AgentGraph): AgentGraph {
   return next;
 }
 
+/** Failure-aware I_loop: mount a policy critic whose text is the official airline gates. */
+export function applyPolicyChecklistMutation(g: AgentGraph, checklist: string): AgentGraph {
+  const next = cloneGraph(g);
+  next.version = g.version + 1;
+  next.id = `${g.id}-policy-checklist`;
+  next.meta = { ...(g.meta ?? {}), technique: "policy-checklist", mutated: true };
+  const kids = next.root.children ?? [];
+  if (!kids.some((c) => c.key === "policy-checklist")) {
+    next.root = {
+      ...next.root,
+      children: [
+        ...kids,
+        node({
+          key: "policy-checklist",
+          kind: "policy",
+          role: "critic",
+          objective: checklist,
+          prompt: checklist,
+          technique: "policy-checklist",
+        }),
+      ],
+    };
+  }
+  return next;
+}
+
 /** Second I_loop step: mount a validator that forbids the last failed action. */
 export function applyValidatorMutation(g: AgentGraph): AgentGraph {
   const next = cloneGraph(g);

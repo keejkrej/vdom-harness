@@ -4,7 +4,7 @@ Official scores come from measured rewards and the Yao et al. `pass^k` estimator
 
 ## The claim is a closed loop
 
-self-observe → `I_loop` or `I_weight` → run the same tasks → self-observe again, until `pass^k` saturates or a round budget. Serving does not pause. Not a single before/after.
+self-observe → `I_loop` or `I_weight` → run the same tasks → self-observe again, until `pass^k` saturates or a round budget. `I_loop` is failure-aware (Obs / `reward_info` → typed graph), not a fixed self-refine → validator ladder. Serving does not pause. Not a single before/after.
 
 The 5×4 retail one-shot on tasks 0–4 scored `pass^k=1.0`. That slice is **saturated** — it cannot show improvement. Do not lead with it. The figure is `python -m tau2_vdom.improve`.
 
@@ -50,6 +50,16 @@ Finished: 2026-08-19 14:11 CEST. Compact: `improve-live-0731.json`.
 | 2 | validator | 0.333 | 0 | 1 | 0 | I_loop | mount validator |
 
 `stopReason: loop-exhausted`. `servingPaused: false`. I_loop did **not** raise p_hit vs naive one-shot. Round-1 0.0 is a smaller denominator (task 41 skipped). Tasks 39 and 44 stayed 0.0. Not invented.
+
+Airline `reward_basis` is DB × COMMUNICATE (`communicate_info` is `[]` on 39/44), so score 0 is a DB miss. ACTION / `nl_assertions` are diagnostics only.
+
+Gold (from `.tau2-bench/data/tau2/domains/airline/tasks.json`; the policy node encodes **rules**, never these IDs):
+
+- Task 39: cancel every eligible reservation (business, or economy + insurance). Do not invent a “personal reason” block on insured economy. Do not cancel basic economy without insurance, or anything already / partially flown. Extra ineligible cancels also zero the DB.
+- Task 44: if the user is healthy, insurance does not apply — refuse that economy cancel. Then complete **every** eligible cabin upgrade (`update_reservation_flights`). Cancelling the ineligible reservation zeros the score. Do not force-cancel it.
+- Task 41: check reservations, cancel none. Already hits.
+
+The next I_loop arm is `policy-checklist`: if Obs sees `refusedCancel` / a missed `cancel_reservation` or `update_reservation_*`, mount that policy critic instead of another generic self-refine. Hung trials retry once and stay in `taskPHit` as null rather than disappearing. This arm is not a measured p_hit win until the parent re-runs live 0731.
 
 Probe (one-shot, same model): airline 0/1/2 all hit 1.0 (too easy); 23 and 18 hit; 39, 44, 41 missed (41 later hit on the loop's one-shot trial).
 

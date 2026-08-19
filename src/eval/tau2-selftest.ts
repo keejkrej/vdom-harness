@@ -11,9 +11,11 @@ import {
   applyILoop,
   gateWeightMount,
   loopExhausted,
+  obsNeedsPolicy,
   recommendIntervention,
   recommendSliceIntervention,
 } from "./tau2-improve.js";
+import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.js";
 
 let passed = 0;
 let failed = 0;
@@ -141,6 +143,14 @@ async function testGraphAndConfig(): Promise<void> {
   assertEq(tau2Graph("one-shot").meta?.technique, "one-shot", "oneshot graph");
   assertEq(tau2Graph("self-refine").root.children?.[0]?.role, "critic", "self-refine critic");
   assert(tau2Graph("validator").root.children?.some((c) => c.role === "validator"), "validator node");
+  assert(
+    tau2Graph("policy-checklist").root.children?.some((c) => c.key === "policy-checklist"),
+    "policy-checklist node",
+  );
+  assert(
+    (tau2Graph("policy-checklist").root.children?.[0]?.objective ?? "").includes("business cabin"),
+    "policy node is grounded in official airline cancel gates",
+  );
   assert(tau2Graph("reflexion").root.children?.some((c) => c.role === "memory"), "reflexion memory");
   assertEq(DEFAULT_OPENROUTER_MODEL, "deepseek/deepseek-v4-flash-0731", "0731 not 0424");
   const cfg = resolveChatConfig();
@@ -296,6 +306,123 @@ async function testILoopAndWeightGate(): Promise<void> {
   assertEq(sliceWeight, "I_weight", "exhausted loop + miss → I_weight");
 }
 
+async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
+  const missRewardInfo = {
+    reward: 0,
+    action_checks: [
+      {
+        action: { name: "cancel_reservation", arguments: { reservation_id: "MSJ4OA" } },
+        action_match: false,
+      },
+      {
+        action: { name: "cancel_reservation", arguments: { reservation_id: "8C8K4E" } },
+        action_match: true,
+      },
+    ],
+  };
+  const obs = observeTau2({
+    traces: [],
+    actions: [
+      { kind: "tool", text: "cancel_reservation", toolName: "cancel_reservation", toolArgs: { reservation_id: "8C8K4E" }, ok: true },
+      {
+        kind: "text",
+        text: "I am afraid there is no way for me to cancel UDMOP1; no-show is not possible.",
+      },
+    ],
+    reward: 0,
+    rewardInfo: missRewardInfo,
+  });
+  assertEq(obs.nSuccessProxy, 0, "miss stays 0");
+  assertEq(obs.missedActions?.[0]?.name, "cancel_reservation", "missedActions from reward_info");
+  assertEq(obs.missedActions?.[0]?.arguments?.reservation_id, "MSJ4OA", "missed MSJ4OA args");
+  assertEq(obs.refusedCancel, true, "refusedCancel from assistant text");
+  assertEq(obs.inventedPolicy, true, "inventedPolicy from no-show / no way");
+  assertEq(obs.techniqueRecommendation, "policy-checklist", "arm recommends policy technique");
+  assertEq(obs.arm, "I_loop", "typed miss is still I_loop, not I_weight");
+  assert(obs.critique.includes("policy-checklist"), "critique names policy-checklist");
+  assertEq(shouldRecommendPolicy(obs), true, "shouldRecommendPolicy on cancel miss");
+  assertEq(obsNeedsPolicy(obs), true, "obsNeedsPolicy true");
+
+  const mockUpdateMiss = observeTau2({
+    traces: [],
+    actions: [{ kind: "tool", text: "create_task", toolName: "create_task", toolArgs: {}, ok: true }],
+    reward: 0,
+    rewardInfo: {
+      action_checks: [
+        { action: { name: "update_task_status", arguments: { task_id: "task_1" } }, action_match: false },
+      ],
+    },
+  });
+  assertEq(mockUpdateMiss.techniqueRecommendation, undefined, "mock update_task_status does not select policy");
+  assertEq(obsNeedsPolicy(mockUpdateMiss), false, "mock miss keeps the generic ladder");
+
+  const hung = observeTau2({
+    traces: [],
+    actions: [],
+    reward: null,
+    hung: true,
+  });
+  assertEq(hung.hung, true, "hung feature");
+  assertEq(hung.nSuccessProxy, 0, "hung is not a hit");
+  assert(hung.critique.includes("null reward"), "hung critique keeps the task in the set");
+
+  const policy = applyILoop(undefined, obs);
+  assertEq(policy.applied, true, "I_loop applies policy graph on refusedCancel");
+  assertEq(policy.techniqueAfter, "policy-checklist", "technique is policy-checklist, not self-refine");
+  assert(
+    policy.graphDiff.some((o) => o.op === "mount" && o.key === "policy-checklist"),
+    "graph diff mounts policy-checklist",
+  );
+  const policyNode = policy.graphAfter.root.children?.find((c) => c.key === "policy-checklist");
+  assert(policyNode != null, "policy node present");
+  const policyText = `${policyNode?.objective ?? ""}\n${policyNode?.prompt ?? ""}\n${AIRLINE_POLICY_CHECKLIST}`;
+  assert(policyText.includes("last 24 hours"), "objective cites official 24h gate");
+  assert(policyText.includes("Do not stop after the first two"), "prompt says enumerate all");
+  assert(policyText.includes("business cabin"), "checklist is airline policy, not think harder");
+  assert(
+    policyText.includes("Economy + travel insurance is eligible"),
+    "insured economy is eligible; no invented personal-reason block",
+  );
+  assert(
+    policyText.includes("Do not invent a \"personal reason\""),
+    "explicitly forbids a personal-reason refuse",
+  );
+  assert(
+    policyText.includes("If the user states they are healthy"),
+    "healthy user → insurance does not apply; refuse that cancel",
+  );
+  assert(
+    policyText.includes("refuse it, then continue: complete every eligible cabin upgrade"),
+    "after an ineligible cancel, finish every eligible upgrade",
+  );
+  assert(
+    !/S61CZX|MSJ4OA|8C8K4E|LU15PA|UDMOP1|XAZ3C0|I6M8JQ|4XGCCM|NM1VX1|H8Q05L|KC18K6/.test(policyText),
+    "policy encodes rules, never gold reservation IDs",
+  );
+  assert(!/force cancel/i.test(policyText), "does not force-cancel any reservation");
+
+  const again = applyILoop(policy.graphAfter, obs);
+  assertEq(again.applied, false, "second policy I_loop is exhausted");
+  assertEq(loopExhausted(policy.graphAfter, obs), true, "policy graph exhausts when Obs still wants policy");
+
+  const generic = applyILoop();
+  assertEq(generic.techniqueAfter, "self-refine", "without Obs miss, first step is still self-refine");
+
+  const afterValidator = applyILoop(applyILoop(generic.graphAfter).graphAfter, obs);
+  assertEq(afterValidator.techniqueAfter, "policy-checklist", "after validator, Obs miss still mounts policy");
+
+  const provider = new DeterministicProvider();
+  const policyTurn = await runTau2Turn({
+    policy: "Create tasks when asked.",
+    tools: [{ name: "create_task" }],
+    messages: [{ role: "user", content: "Create a new task called Important Meeting for user_1." }],
+    provider,
+    technique: "policy-checklist",
+  });
+  assertEq(policyTurn.toolCalls?.[0]?.name, "create_task", "policy-checklist still scripts mock create");
+  assert(policyTurn.traces.some((t) => t.nodeKey === "policy-checklist"), "policy-checklist trace recorded");
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -314,6 +441,7 @@ async function main(): Promise<void> {
     ["graph + 0731 default + no-key config", testGraphAndConfig],
     ["naive update fails; refine recovers", testNaiveUpdateFailsRefineRecovers],
     ["I_loop diff + I_weight gate", testILoopAndWeightGate],
+    ["failure-aware Obs + policy-checklist I_loop", testFailureAwareObsAndPolicyLoop],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

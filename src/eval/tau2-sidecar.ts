@@ -9,7 +9,7 @@ import { createProvider, DeterministicProvider, type Message, type ToolSpec } fr
 import { runTau2Turn } from "./tau2-turn.js";
 import { type AgentGraph } from "../ir.js";
 import { FakeTrainer } from "../trainer.js";
-import { type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
+import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { applyILoop, gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { createInterface } from "node:readline";
@@ -25,6 +25,7 @@ type Incoming = {
   graph?: AgentGraph;
   before?: number;
   after?: number;
+  obs?: Tau2Obs | Tau2Obs[];
 };
 
 type SidecarReply = Tau2TurnResponse & {
@@ -104,7 +105,7 @@ async function handle(line: string): Promise<void> {
   }
 
   if (req.op === "i_loop") {
-    const applied = applyILoop(req.graph ?? currentGraph);
+    const applied = applyILoop(req.graph ?? currentGraph, req.obs);
     currentTechnique = applied.techniqueAfter;
     currentGraph = applied.graphAfter;
     write({

@@ -12,5 +12,6 @@ export * from "./improve.js";
 export * from "./eval/tau2-types.js";
 export * from "./eval/tau2-graph.js";
 export * from "./eval/tau2-obs.js";
+export * from "./eval/tau2-policy.js";
 export * from "./eval/tau2-improve.js";
 export * from "./eval/tau2-turn.js";

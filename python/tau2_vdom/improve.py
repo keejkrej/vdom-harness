@@ -38,6 +38,7 @@ from tau2_vdom.runner import (
     PAPER_REPO,
     REPO_ROOT,
     TAU2_REPO,
+    HungSimulation,
     _actions_from_messages,
     _apply_openrouter_defaults,
     _ensure_tau2_data_dir,
@@ -45,6 +46,7 @@ from tau2_vdom.runner import (
     _litellm_user_model,
     _obs,
     _pin_tau2_judges,
+    serialize_reward_info,
     write_eval_file,
 )
 
@@ -56,7 +58,14 @@ SATURATED_NOTE = (
 CLAIM = (
     "Closed loop: self-observe → I_loop or I_weight → run again → self-observe, "
     "until pass^k saturates or the round budget. Serving does not pause. "
-    "Not the saturated 5×4 retail one-shot pass^k=1.0."
+    "I_loop is failure-aware (Obs / reward_info → typed graph), not a fixed "
+    "self-refine → validator ladder. Not the saturated 5×4 retail one-shot pass^k=1.0."
+)
+SKIP_POLICY = (
+    "A hung trial is retried once. If it still hangs, the simulation is recorded "
+    "with reward=null and hung=true; the task stays in taskPHit as null. pass^k "
+    "averages only tasks that completed at least one trial, so a skip cannot "
+    "disappear from the reported set and is not treated as a measured 0."
 )
 # Two official mock tasks so the loop needs two I_loop rounds (not one before/after).
 DEFAULT_MOCK_TASKS = ["update_task_1", "impossible_task_1"]
@@ -68,17 +77,27 @@ def _success(reward: float | None) -> bool:
 
 
 def pass_hat_k_from_rewards(by_task: dict[str, list[float | None]]) -> dict[str, float]:
-    """Official pass^k estimator (Yao et al. 2024): C(c,k)/C(n,k), averaged over tasks."""
-    if not by_task:
+    """Official pass^k estimator (Yao et al. 2024): C(c,k)/C(n,k), averaged over tasks.
+
+    Null rewards (hung / skipped after retry) are not completed trials. Tasks with
+    no completed trial stay in the set for taskPHit but are omitted from this
+    average so a skip is not a measured 0.
+    """
+    completed: dict[str, list[float]] = {}
+    for tid, rewards in by_task.items():
+        done = [r for r in rewards if r is not None]
+        if done:
+            completed[tid] = done
+    if not completed:
         return {}
-    lengths = {len(v) for v in by_task.values()}
+    lengths = {len(v) for v in completed.values()}
     n = min(lengths) if lengths else 0
     if n <= 0:
         return {}
     out: dict[str, float] = {}
     for k in range(1, n + 1):
         scores: list[float] = []
-        for rewards in by_task.values():
+        for rewards in completed.values():
             trials = rewards[:n]
             c = sum(1 for r in trials if _success(r))
             scores.append(math.comb(c, k) / math.comb(n, k) if c >= k else 0.0)
@@ -87,8 +106,11 @@ def pass_hat_k_from_rewards(by_task: dict[str, list[float | None]]) -> dict[str,
     return out
 
 
-def _rewards_by_task(simulations: list[Any]) -> dict[str, list[float | None]]:
-    by_task: dict[str, list[float | None]] = {}
+def _rewards_by_task(
+    simulations: list[Any],
+    task_ids: list[str] | None = None,
+) -> dict[str, list[float | None]]:
+    by_task: dict[str, list[float | None]] = {str(t): [] for t in (task_ids or [])}
     for sim in simulations:
         reward = None
         if getattr(sim, "reward_info", None) is not None:
@@ -119,13 +141,16 @@ def _p_hit(pass_hat: dict[str, float]) -> float | None:
     return None
 
 
-def _task_p_hit(by_task: dict[str, list[float | None]]) -> dict[str, float]:
-    out: dict[str, float] = {}
+def _task_p_hit(by_task: dict[str, list[float | None]]) -> dict[str, float | None]:
+    """Always include every requested task. All-null (skipped) → null, not dropped."""
+    out: dict[str, float | None] = {}
     for tid, rewards in by_task.items():
-        if not rewards:
+        completed = [r for r in rewards if r is not None]
+        if not completed:
+            out[tid] = None
             continue
-        hits = sum(1 for r in rewards if _success(r))
-        out[tid] = hits / len(rewards)
+        hits = sum(1 for r in completed if _success(r))
+        out[tid] = hits / len(completed)
     return out
 
 
@@ -140,7 +165,7 @@ def run_slice(
     user: str,
     max_steps: int,
     trial_timeout_s: int = 480,
-) -> tuple[list[Any], dict[str, float], float | None, Path]:
+) -> tuple[list[Any], dict[str, float], float | None, Path, list[str]]:
     from tau2.data_model.simulation import TextRunConfig
     from tau2.evaluator.evaluator import EvaluationType
     from tau2.runner import get_tasks, run_single_task
@@ -178,29 +203,43 @@ def run_slice(
             tid = str(getattr(task, "id", "?"))
             t0 = time.time()
             print(f"[improve] start task={tid} trial={trial} technique={technique}", flush=True)
-            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            try:
-                fut = pool.submit(
-                    run_single_task,
-                    config,
-                    task,
-                    seed=42 + trial,
-                    evaluation_type=EvaluationType.ALL,
-                )
-                sim = fut.result(timeout=trial_timeout_s)
-            except concurrent.futures.TimeoutError:
-                print(
-                    f"[improve] SKIP task={tid} trial={trial} hung > {trial_timeout_s}s",
-                    flush=True,
-                )
-                skipped.append(f"{tid}:t{trial}")
+            sim = None
+            last_err: str | None = None
+            for attempt in (0, 1):
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                try:
+                    fut = pool.submit(
+                        run_single_task,
+                        config,
+                        task,
+                        seed=42 + trial + attempt,
+                        evaluation_type=EvaluationType.ALL,
+                    )
+                    sim = fut.result(timeout=trial_timeout_s)
+                    last_err = None
+                    break
+                except concurrent.futures.TimeoutError:
+                    last_err = "timeout"
+                    print(
+                        f"[improve] HUNG task={tid} trial={trial} attempt={attempt} "
+                        f"> {trial_timeout_s}s"
+                        + ("; retrying once" if attempt == 0 else "; keeping null reward"),
+                        flush=True,
+                    )
+                except Exception as exc:
+                    last_err = f"err:{type(exc).__name__}"
+                    print(
+                        f"[improve] FAIL task={tid} trial={trial} attempt={attempt}: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    break
+                finally:
+                    pool.shutdown(wait=False, cancel_futures=True)
+            if sim is None:
+                skipped.append(f"{tid}:t{trial}:{last_err or 'timeout'}")
+                simulations.append(HungSimulation(tid, trial, last_err or "timeout"))
                 continue
-            except Exception as exc:
-                print(f"[improve] FAIL task={tid} trial={trial}: {type(exc).__name__}: {exc}", flush=True)
-                skipped.append(f"{tid}:t{trial}:err")
-                continue
-            finally:
-                pool.shutdown(wait=False, cancel_futures=True)
             elapsed = time.time() - t0
             reward = None
             if getattr(sim, "reward_info", None) is not None:
@@ -212,9 +251,10 @@ def run_slice(
             )
             simulations.append(sim)
     if skipped:
-        print(f"[improve] skipped={skipped}", flush=True)
+        print(f"[improve] skipped={skipped} ({SKIP_POLICY})", flush=True)
 
-    pass_hat = pass_hat_k_from_rewards(_rewards_by_task(simulations))
+    by_task = _rewards_by_task(simulations, task_ids)
+    pass_hat = pass_hat_k_from_rewards(by_task)
     avg = _avg_reward(simulations)
     path = write_eval_file(
         domain=domain,
@@ -231,7 +271,7 @@ def run_slice(
         extra_traces=dict(TURN_TRACES_BY_TASK),
         tag=f"{technique}-r{int(time.time())}",
     )
-    return simulations, pass_hat, avg, path
+    return simulations, pass_hat, avg, path, skipped
 
 
 def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
@@ -241,12 +281,25 @@ def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
         if getattr(sim, "reward_info", None) is not None:
             reward = float(sim.reward_info.reward)
         actions = _actions_from_messages(getattr(sim, "messages", []) or [])
-        obs_list.append(_obs(actions, reward, []))
+        hung = bool(getattr(sim, "hung", False))
+        obs_list.append(
+            _obs(
+                actions,
+                reward,
+                [],
+                reward_info=getattr(sim, "reward_info", None),
+                hung=hung,
+                messages=getattr(sim, "messages", None) or [],
+            )
+        )
     return obs_list
 
 
-def _sidecar_i_loop(sidecar: Any) -> dict[str, Any]:
-    mutated = sidecar.request({"op": "i_loop"})
+def _sidecar_i_loop(sidecar: Any, obs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"op": "i_loop"}
+    if obs is not None:
+        payload["obs"] = obs
+    mutated = sidecar.request(payload)
     ping = sidecar.request({"op": "ping"})
     return {
         "applied": mutated.get("content") == "applied",
@@ -301,6 +354,8 @@ def _round_record(
     intervention: str | None,
     graph_diff: list[Any],
     eval_file: Path,
+    skipped: list[str] | None = None,
+    reward_infos: list[dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     return {
         "round": round_i,
@@ -310,9 +365,12 @@ def _round_record(
         "avgReward": avg,
         "taskPHit": _task_p_hit(by_task),
         "obs": obs,
+        "rewardInfo": reward_infos or [],
         "intervention": intervention,
         "graphDiff": graph_diff,
         "evalFile": str(eval_file.relative_to(REPO_ROOT)),
+        "skipped": skipped or [],
+        "skipPolicy": SKIP_POLICY,
     }
 
 
@@ -340,7 +398,7 @@ def run_improve(
     serving_paused = False
     rounds: list[dict[str, Any]] = []
 
-    sims, pass_hat, avg, path = run_slice(
+    sims, pass_hat, avg, path, skipped = run_slice(
         domain=domain,
         task_ids=task_ids,
         technique=technique,
@@ -359,10 +417,12 @@ def run_improve(
             pass_hat=pass_hat,
             avg=avg,
             obs=obs,
-            by_task=_rewards_by_task(sims),
+            by_task=_rewards_by_task(sims, task_ids),
             intervention=None,
             graph_diff=[],
             eval_file=path,
+            skipped=skipped,
+            reward_infos=[serialize_reward_info(getattr(s, "reward_info", None)) for s in sims],
         )
     )
 
@@ -378,7 +438,7 @@ def run_improve(
             break
 
         miss = any(o.get("nSuccessProxy", 0) != 1 for o in obs)
-        loop = _sidecar_i_loop(sidecar)
+        loop = _sidecar_i_loop(sidecar, obs=obs)
         serving_paused = serving_paused or bool(loop.get("servingPaused"))
 
         if loop.get("applied"):
@@ -403,10 +463,14 @@ def run_improve(
                         pass_hat=pass_hat,
                         avg=avg,
                         obs=obs,
-                        by_task=_rewards_by_task(sims),
+                        by_task=_rewards_by_task(sims, task_ids),
                         intervention=intervention,
                         graph_diff=graph_diff,
                         eval_file=path,
+                        skipped=skipped,
+                        reward_infos=[
+                            serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
+                        ],
                     )
                 )
                 stop_reason = "weight-rejected"
@@ -419,7 +483,7 @@ def run_improve(
             stop_reason = "saturated"
             break
 
-        sims, pass_hat, avg, path = run_slice(
+        sims, pass_hat, avg, path, skipped = run_slice(
             domain=domain,
             task_ids=task_ids,
             technique=technique,
@@ -438,10 +502,12 @@ def run_improve(
                 pass_hat=pass_hat,
                 avg=avg,
                 obs=obs,
-                by_task=_rewards_by_task(sims),
+                by_task=_rewards_by_task(sims, task_ids),
                 intervention=intervention,
                 graph_diff=graph_diff,
                 eval_file=path,
+                skipped=skipped,
+                reward_infos=[serialize_reward_info(getattr(s, "reward_info", None)) for s in sims],
             )
         )
         if _saturated(pass_hat):
@@ -485,6 +551,7 @@ def run_improve(
         "graphDiffs": [x["graphDiff"] for x in improve_rounds],
         "rounds": rounds,
         "servingPaused": serving_paused,
+        "skipPolicy": SKIP_POLICY,
         "command": (
             "PYTHONPATH=python python3 -m tau2_vdom.improve"
             + ("" if domain == "mock" else f" --domain {domain}")
@@ -524,7 +591,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--trial-timeout",
         type=int,
         default=480,
-        help="Skip a task if one trial exceeds this many seconds (default 480).",
+        help=(
+            "Retry once if a trial exceeds this many seconds (default 480). "
+            "A second hang keeps the task in taskPHit with null reward."
+        ),
     )
     p.add_argument(
         "--weight",
