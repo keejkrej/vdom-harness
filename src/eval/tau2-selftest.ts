@@ -3,6 +3,8 @@ import {
   DeterministicProvider,
   resolveChatConfig,
   scriptedTau2MockTurn,
+  type Message,
+  type Provider,
 } from "../providers.js";
 import { runTau2Turn } from "./tau2-turn.js";
 import { observeTau2, actionFromCompletion, markRepeats } from "./tau2-obs.js";
@@ -10,12 +12,15 @@ import { tau2Graph } from "./tau2-graph.js";
 import {
   applyILoop,
   gateWeightMount,
+  graphHas,
   loopExhausted,
   obsNeedsPolicy,
   recommendIntervention,
   recommendSliceIntervention,
 } from "./tau2-improve.js";
 import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.js";
+import { GOLD_RESERVATION_IDS, hasGoldReservationId, serializeKernelC } from "./tau2-kernel.js";
+import { runSelfObs, SELF_OBS_SYSTEM } from "./tau2-self-obs.js";
 
 let passed = 0;
 let failed = 0;
@@ -423,6 +428,352 @@ async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
   assert(policyTurn.traces.some((t) => t.nodeKey === "policy-checklist"), "policy-checklist trace recorded");
 }
 
+function scriptedProvider(body: string): Provider {
+  return {
+    name: "scripted-self-obs",
+    async complete() {
+      return body;
+    },
+    async completeTurn() {
+      return { content: body };
+    },
+  };
+}
+
+async function testVisibleKernelC(): Promise<void> {
+  const seen: Message[][] = [];
+  const inner = new DeterministicProvider();
+  const provider: Provider = {
+    name: "capture",
+    async complete(msgs, opts) {
+      seen.push(msgs);
+      return inner.complete(msgs, opts);
+    },
+    async completeTurn(msgs, opts) {
+      seen.push(msgs);
+      return inner.completeTurn(msgs, opts);
+    },
+  };
+  const graph = tau2Graph("one-shot");
+  const turn = await runTau2Turn({
+    policy: "Create tasks when asked.",
+    tools: [{ name: "create_task", parameters: { type: "object" } }],
+    messages: [
+      { role: "assistant", content: "Hi! How can I help you today?" },
+      { role: "user", content: "Please create a task called Important Meeting for user_1." },
+    ],
+    provider,
+    technique: "one-shot",
+    graph,
+  });
+  const systems = seen.flatMap((msgs) => msgs.filter((m) => m.role === "system").map((m) => m.content));
+  assert(systems.length > 0, "system message sent");
+  const sys = turn.system;
+  assert(sys.includes(graph.id), "runTau2Turn system contains graph id");
+  assert(sys.includes("solve"), "runTau2Turn system contains oneshot key solve");
+  assert(/kernel C/i.test(sys), "system names kernel C");
+  assert(sys.includes("You are this AgentGraph"), "system says you are this graph");
+  assert(sys.includes("get_agent_graph"), "system names get_agent_graph");
+  assert(sys.includes("set_agent_graph"), "system names set_agent_graph");
+  assert(sys.includes("You may read and rewrite your own graph"), "willingness: may rewrite C");
+  assert(sys.includes("get_agent_graph before set_agent_graph"), "willingness: get before set");
+  assert(systems.every((s) => s.includes("solve") && s.includes(graph.id)), "every system dump includes C");
+  assertEq(turn.toolCalls?.[0]?.name, "create_task", "oneshot still scripts create_task");
+}
+
+async function testSelfObsPatchChangesGraph(): Promise<void> {
+  const start = tau2Graph("one-shot");
+  const result = await runSelfObs({
+    graph: start,
+    rewards: [0],
+    terminations: ["user_stop"],
+    missedToolNames: ["update_task_status"],
+    provider: scriptedProvider(
+      JSON.stringify({
+        action: "I_loop",
+        graphPatch: {
+          technique: "self-refine",
+          nodes: [
+            {
+              key: "new-critic",
+              role: "critic",
+              objective: "Look at this graph and these traces",
+              prompt: "Write a short critique from this miss. Do not invent reservation IDs.",
+            },
+          ],
+        },
+        rationale: "path missed; rewrite C",
+      }),
+    ),
+  });
+  assertEq(result.path, "self", "scripted patch is the self path");
+  assertEq(result.action, "I_loop", "action is I_loop");
+  assertEq(result.applied, true, "patch applied");
+  assertEq(result.servingPaused, false, "servingPaused stays false");
+  assert(graphHas(result.graphAfter, "new-critic"), "graph gained new node key");
+  assert(!graphHas(start, "new-critic"), "original graph unchanged");
+}
+
+async function testSelfObsWaitDoesNotChangeGraph(): Promise<void> {
+  const start = tau2Graph("one-shot");
+  const keysBefore = start.root.key;
+  const result = await runSelfObs({
+    graph: start,
+    rewards: [1],
+    terminations: ["user_stop"],
+    provider: scriptedProvider(JSON.stringify({ action: "wait", rationale: "path measure hits S" })),
+  });
+  assertEq(result.path, "self", "wait is a valid self-Obs decision");
+  assertEq(result.action, "wait", "action is wait");
+  assertEq(result.applied, false, "wait does not apply");
+  assertEq(result.graphAfter.root.key, keysBefore, "root key unchanged");
+  assertEq(result.graphAfter.version, start.version, "version unchanged");
+  assert(!graphHas(result.graphAfter, "critic"), "wait did not mount critic");
+  assertEq(result.graphDiff.length, 0, "no graph diff on wait");
+}
+
+async function testNoGoldIdsInNewPrompts(): Promise<void> {
+  const texts = [
+    SELF_OBS_SYSTEM,
+    serializeKernelC(tau2Graph("one-shot")),
+    serializeKernelC(tau2Graph("self-refine")),
+    serializeKernelC(tau2Graph("validator")),
+    serializeKernelC(tau2Graph("policy-checklist")),
+  ];
+  const captured: string[] = [];
+  const inner = new DeterministicProvider();
+  const provider: Provider = {
+    name: "capture-gold",
+    async complete(msgs, opts) {
+      captured.push(...msgs.filter((m) => m.role === "system").map((m) => m.content));
+      return inner.complete(msgs, opts);
+    },
+    async completeTurn(msgs, opts) {
+      captured.push(...msgs.filter((m) => m.role === "system").map((m) => m.content));
+      return inner.completeTurn(msgs, opts);
+    },
+  };
+  const turn = await runTau2Turn({
+    policy: "policy",
+    tools: [{ name: "create_task" }],
+    messages: [{ role: "user", content: "Create a new task called Important Meeting for user_1." }],
+    provider,
+    technique: "one-shot",
+  });
+  texts.push(turn.system, ...captured, SELF_OBS_SYSTEM);
+  for (const t of texts) {
+    assert(!hasGoldReservationId(t), `no gold reservation IDs in prompt (${GOLD_RESERVATION_IDS[0]}…)`);
+  }
+  assert(SELF_OBS_SYSTEM.includes("You may change your own AgentGraph when the path measure misses"), "willingness: may change C on miss");
+  assert(SELF_OBS_SYSTEM.includes("wait when it hits"), "willingness: wait on hit");
+  assert(SELF_OBS_SYSTEM.includes("Do not invent reservation IDs"), "willingness: no invented IDs");
+  assert(
+    SELF_OBS_SYSTEM.includes("Do not transfer the rewrite to a hidden host script"),
+    "willingness: do not hide the rewrite",
+  );
+}
+
+async function testSelfObsFallbackInvalidJson(): Promise<void> {
+  const miss = observeTau2({
+    traces: [],
+    actions: [
+      {
+        kind: "text",
+        text: "I am afraid there is no way for me to cancel; no-show is not possible.",
+      },
+    ],
+    reward: 0,
+    rewardInfo: {
+      action_checks: [
+        { action: { name: "cancel_reservation", arguments: { reservation_id: "MSJ4OA" } }, action_match: false },
+      ],
+    },
+  });
+  const result = await runSelfObs({
+    graph: tau2Graph("one-shot"),
+    obs: miss,
+    rewards: [0],
+    missedToolNames: ["cancel_reservation"],
+    provider: scriptedProvider("this is not json at all"),
+  });
+  assertEq(result.path, "fallback", "invalid JSON uses host fallback");
+  assertEq(result.applied, true, "fallback still applies I_loop");
+  assert(graphHas(result.graphAfter, "policy-checklist"), "fallback mounts canned policy-checklist");
+  const node = result.graphAfter.root.children?.find((c) => c.key === "policy-checklist");
+  assert((node?.prompt ?? "").includes("last 24 hours"), "fallback text is the canned checklist");
+}
+
+async function testMockSelfObsLadder(): Promise<void> {
+  const provider = new DeterministicProvider();
+  const r0 = await runSelfObs({
+    graph: tau2Graph("one-shot"),
+    rewards: [0, 0],
+    terminations: ["user_stop", "transfer"],
+    missedToolNames: ["update_task_status"],
+    provider,
+  });
+  assertEq(r0.path, "self", "mock self-Obs is scripted, not fallback");
+  assertEq(r0.applied, true, "round 0 miss applies");
+  assert(graphHas(r0.graphAfter, "critic"), "0 → mount critic");
+  assert(graphHas(r0.graphAfter, "refine"), "0 → mount refine");
+
+  const r1 = await runSelfObs({
+    graph: r0.graphAfter,
+    rewards: [1, 0],
+    terminations: ["user_stop", "transfer"],
+    missedToolNames: ["transfer_to_human_agents"],
+    provider,
+  });
+  assertEq(r1.path, "self", "round 1 still self");
+  assert(graphHas(r1.graphAfter, "validator"), "0.5 → mount validator");
+
+  const r2 = await runSelfObs({
+    graph: r1.graphAfter,
+    rewards: [1, 1],
+    terminations: ["user_stop", "user_stop"],
+    provider,
+  });
+  assertEq(r2.action, "wait", "1.0 → wait");
+  assertEq(r2.applied, false, "hit does not change the graph");
+  assertEq(r2.graphAfter.version, r1.graphAfter.version, "wait keeps version");
+}
+
+function fakeEnvExecutor(calls?: Array<{ name: string }>): string[] {
+  const executed: string[] = [];
+  for (const c of calls ?? []) {
+    if (c.name === "get_agent_graph" || c.name === "set_agent_graph") {
+      throw new Error(`leaked ${c.name} to env`);
+    }
+    executed.push(c.name);
+  }
+  return executed;
+}
+
+async function testGetThenSetChangesGraph(): Promise<void> {
+  const listed: string[][] = [];
+  const provider: Provider = {
+    name: "get-then-set",
+    async complete() {
+      return "";
+    },
+    async completeTurn(msgs, opts) {
+      listed.push((opts?.tools ?? []).map((t) => t.name));
+      const lastTool = [...msgs].reverse().find((m) => m.role === "tool");
+      if (!lastTool) {
+        return { content: "", toolCalls: [{ id: "g1", name: "get_agent_graph", arguments: {} }] };
+      }
+      if (lastTool.name === "get_agent_graph") {
+        assert(lastTool.content.includes("solve"), "get_agent_graph returns live key solve");
+        assert(!hasGoldReservationId(lastTool.content), "get payload has no gold IDs");
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "s1",
+              name: "set_agent_graph",
+              arguments: {
+                graphPatch: {
+                  technique: "self-refine",
+                  nodes: [
+                    {
+                      key: "live-critic",
+                      role: "critic",
+                      objective: "Critique the next tool from this miss",
+                      prompt: "Name the correct write tool. Do not invent reservation IDs.",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        };
+      }
+      if (lastTool.name === "set_agent_graph") {
+        const body = lastTool.content;
+        assert(body.includes("applied") || body.includes("live-critic"), "set result mentions apply/key");
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "c1",
+              name: "create_task",
+              arguments: { user_id: "user_1", title: "Important Meeting" },
+            },
+          ],
+        };
+      }
+      return { content: "ok" };
+    },
+  };
+
+  const turn = await runTau2Turn({
+    policy: "Create tasks when asked.",
+    tools: [{ name: "create_task", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "Please create a task called Important Meeting for user_1." }],
+    provider,
+    technique: "one-shot",
+    graph: tau2Graph("one-shot"),
+  });
+  assert(listed.some((ts) => ts.includes("get_agent_graph") && ts.includes("set_agent_graph")), "kernel tools on the list");
+  assert(graphHas(turn.graph, "live-critic"), "set_agent_graph mounted new node key");
+  assertEq(turn.servingPaused, false, "servingPaused stays false after set");
+  const setEdit = turn.graphEdits.find((e) => e.tool === "set_agent_graph");
+  assert(setEdit?.applied === true, "set logged applied");
+  assert(setEdit?.rejected === false, "set not rejected");
+  const executed = fakeEnvExecutor(turn.toolCalls);
+  assertEq(executed[0], "create_task", "gym tool after get/set; kernel names never reach env");
+  assert(!(turn.toolCalls ?? []).some((t) => t.name === "get_agent_graph" || t.name === "set_agent_graph"), "kernel tools stripped from result");
+}
+
+async function testSetRejectsGoldIds(): Promise<void> {
+  const provider: Provider = {
+    name: "set-gold",
+    async complete() {
+      return "";
+    },
+    async completeTurn(msgs) {
+      const lastTool = [...msgs].reverse().find((m) => m.role === "tool");
+      if (!lastTool) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "s-gold",
+              name: "set_agent_graph",
+              arguments: {
+                graphPatch: {
+                  nodes: [
+                    {
+                      key: "policy-checklist",
+                      role: "critic",
+                      prompt: "Cancel reservation MSJ4OA then S61CZX.",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        };
+      }
+      return { content: "I will follow the policy." };
+    },
+  };
+  const start = tau2Graph("one-shot");
+  const turn = await runTau2Turn({
+    policy: "policy",
+    tools: [{ name: "create_task" }],
+    messages: [{ role: "user", content: "hello" }],
+    provider,
+    technique: "one-shot",
+    graph: start,
+  });
+  const setEdit = turn.graphEdits.find((e) => e.tool === "set_agent_graph");
+  assert(setEdit?.rejected === true, "gold ID payload rejected");
+  assert(setEdit?.applied === false, "gold ID set not applied");
+  assert(!graphHas(turn.graph, "policy-checklist"), "rejected set does not mount a node");
+  fakeEnvExecutor(turn.toolCalls);
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -442,6 +793,14 @@ async function main(): Promise<void> {
     ["naive update fails; refine recovers", testNaiveUpdateFailsRefineRecovers],
     ["I_loop diff + I_weight gate", testILoopAndWeightGate],
     ["failure-aware Obs + policy-checklist I_loop", testFailureAwareObsAndPolicyLoop],
+    ["runTau2Turn system contains live graph C", testVisibleKernelC],
+    ["self-Obs patch changes graph (new node key)", testSelfObsPatchChangesGraph],
+    ["self-Obs wait does not change graph", testSelfObsWaitDoesNotChangeGraph],
+    ["no gold IDs in new prompts", testNoGoldIdsInNewPrompts],
+    ["invalid self-Obs JSON uses fallback checklist", testSelfObsFallbackInvalidJson],
+    ["mock scripted self-Obs still 0 → 0.5 → 1.0", testMockSelfObsLadder],
+    ["get then set changes graph; env never sees kernel tools", testGetThenSetChangesGraph],
+    ["set_agent_graph rejects gold reservation IDs", testSetRejectsGoldIds],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

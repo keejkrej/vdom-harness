@@ -25,6 +25,10 @@ export type ILoopResult = {
   graphBefore: AgentGraph;
   graphAfter: AgentGraph;
   graphDiff: GraphDiffOp[];
+  /** self = LLM Obs patch; fallback = host technique ladder / canned checklist. */
+  path?: "self" | "fallback";
+  action?: "wait" | "I_loop";
+  rationale?: string;
 };
 
 export type WeightGateDecision = {
@@ -119,7 +123,7 @@ export function diffOps(ops: ReconcileOp[]): GraphDiffOp[] {
   }));
 }
 
-function techniqueOf(g: AgentGraph): Tau2Technique {
+export function techniqueOfGraph(g: AgentGraph): Tau2Technique {
   const t = g.meta?.technique;
   if (
     t === "self-refine" ||
@@ -143,7 +147,7 @@ function techniqueOf(g: AgentGraph): Tau2Technique {
  */
 export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoopResult {
   const graphBefore = start ?? tau2Graph("one-shot");
-  const techniqueBefore = techniqueOf(graphBefore);
+  const techniqueBefore = techniqueOfGraph(graphBefore);
   let graphAfter: AgentGraph;
   let techniqueAfter: Tau2Technique;
   let applied = true;
@@ -181,6 +185,9 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
     graphBefore,
     graphAfter,
     graphDiff: diffOps(rec.ops),
+    path: "fallback",
+    action: "I_loop",
+    rationale: applied ? "host I_loop ladder" : "host I_loop exhausted",
   };
 }
 

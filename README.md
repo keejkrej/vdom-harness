@@ -60,7 +60,7 @@ Without a key, the deterministic provider stays active.
 
 ## Evaluation
 
-The result this repo claims is a **closed loop**: self-observe → `I_loop` or `I_weight` → run again → self-observe, until `pass^k` saturates or a round budget. `I_loop` is failure-aware (Obs / τ² `reward_info` → a typed graph such as policy-checklist), not a fixed self-refine → validator ladder. Not a static one-shot τ² score and not a single before/after. Serving does not pause. The 5×4 retail one-shot slice on tasks 0–4 scored `pass^k=1.0` — that slice is saturated and cannot show improvement; do not lead with it.
+The result this repo claims is a **closed loop**: self-observe → `I_loop` or `I_weight` → run again → self-observe, until `pass^k` saturates or a round budget. The serving agent sees kernel C and may `get_agent_graph` / `set_agent_graph` mid-turn (intercepted locally; never forwarded to the τ² gym); host I_loop is fallback if it never called set. The canned airline checklist is fallback when self-Obs JSON is invalid. Not a static one-shot τ² score and not a single before/after. Serving does not pause. The 5×4 retail one-shot slice on tasks 0–4 scored `pass^k=1.0` — that slice is saturated and cannot show improvement; do not lead with it.
 
 Toys in `src/benchmarks.ts` (word-reverse, and friends) are **unit fixtures**. They prove the reconciler and DeterministicProvider, not the agent. The paper that accompanies this runtime is [agent-stochastic-dynamics](https://github.com/keejkrej/agent-stochastic-dynamics). This repo is the submitted runtime.
 

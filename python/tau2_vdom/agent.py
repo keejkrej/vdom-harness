@@ -16,6 +16,7 @@ from tau2.data_model.message import (
 from tau2.environment.tool import Tool
 from tau2.registry import registry
 
+from tau2_vdom.kernel_tools import strip_kernel_self_tools
 from tau2_vdom.sidecar import VdomSidecar, default_sidecar
 
 DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731"
@@ -115,6 +116,7 @@ class VdomAgent(HalfDuplexAgent["VdomAgentState"]):
             state.messages.append(message)
 
         # Re-read env each turn so I_loop can swap technique without restarting serving.
+        # get/set_agent_graph are intercepted in the sidecar; strip if they leak.
         technique = os.environ.get("VDOM_TAU2_TECHNIQUE") or self.technique
         payload = {
             "op": "turn",
@@ -132,7 +134,7 @@ class VdomAgent(HalfDuplexAgent["VdomAgentState"]):
         key = self.task_id or "_"
         TURN_TRACES_BY_TASK.setdefault(key, []).extend(traces)
 
-        tool_calls_raw = data.get("tool_calls") or []
+        tool_calls_raw = strip_kernel_self_tools(data.get("tool_calls") or [])
         if tool_calls_raw:
             tool_calls = [
                 ToolCall(
