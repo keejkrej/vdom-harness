@@ -1,8 +1,13 @@
 import { flatten, type AgentGraph } from "../ir.js";
-import { applySelfRefineMutation, applyValidatorMutation } from "../scientist.js";
+import {
+  applyPolicyChecklistMutation,
+  applySelfRefineMutation,
+  applyValidatorMutation,
+} from "../scientist.js";
 import { reconcile, type ReconcileOp } from "../reconciler.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { type Tau2Obs, type Tau2Technique } from "./tau2-types.js";
+import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.js";
 
 export type InterventionArm = "I_loop" | "I_weight" | "wait";
 
@@ -34,8 +39,16 @@ export function graphHas(g: AgentGraph, key: string): boolean {
   return flatten(g).some((f) => f.node.key === key);
 }
 
-export function loopExhausted(g: AgentGraph): boolean {
+export function loopExhausted(g: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): boolean {
+  if (graphHas(g, "policy-checklist")) return true;
+  if (obsNeedsPolicy(obs)) return false;
   return graphHas(g, "critic") && graphHas(g, "validator");
+}
+
+export function obsNeedsPolicy(obs?: Tau2Obs | Tau2Obs[] | null): boolean {
+  if (!obs) return false;
+  const list = Array.isArray(obs) ? obs : [obs];
+  return list.some((o) => shouldRecommendPolicy(o));
 }
 
 export function recommendIntervention(
@@ -81,13 +94,20 @@ export function summarizeObs(obsList: Tau2Obs[]): Tau2Obs {
     critique:
       hits === obsList.length
         ? "path measure hits S; wait"
-        : toolFailures > 0
-          ? "tool failures in trajectory; inspect env channel"
-          : repeatActions > 0
-            ? "repeat actions; loop mutation or wait"
-            : "episode unfinished or miss; inspect cascade / tools",
+        : obsNeedsPolicy(obsList)
+          ? "user asked cancel/update and agent refused or never called the tool; I_loop policy-checklist"
+          : toolFailures > 0
+            ? "tool failures in trajectory; inspect env channel"
+            : repeatActions > 0
+              ? "repeat actions; loop mutation or wait"
+              : "episode unfinished or miss; inspect cascade / tools",
     toolFailures,
     repeatActions,
+    missedActions: obsList.flatMap((o) => o.missedActions ?? []),
+    refusedCancel: obsList.some((o) => o.refusedCancel),
+    inventedPolicy: obsList.some((o) => o.inventedPolicy),
+    hung: obsList.some((o) => o.hung),
+    techniqueRecommendation: obsNeedsPolicy(obsList) ? "policy-checklist" : last.techniqueRecommendation,
   };
 }
 
@@ -101,7 +121,13 @@ export function diffOps(ops: ReconcileOp[]): GraphDiffOp[] {
 
 function techniqueOf(g: AgentGraph): Tau2Technique {
   const t = g.meta?.technique;
-  if (t === "self-refine" || t === "validator" || t === "reflexion" || t === "one-shot") {
+  if (
+    t === "self-refine" ||
+    t === "validator" ||
+    t === "reflexion" ||
+    t === "one-shot" ||
+    t === "policy-checklist"
+  ) {
     return t;
   }
   return "one-shot";
@@ -109,16 +135,27 @@ function techniqueOf(g: AgentGraph): Tau2Technique {
 
 /**
  * Next I_loop step on the live graph. Reconcile is deterministic; serving does not restart.
- * one-shot → Self-Refine (critic+refine); self-refine → validator node; then exhausted.
+ *
+ * Default ladder (mock / no typed miss): one-shot → Self-Refine → validator → exhausted.
+ * If Obs says refusedCancel / inventedPolicy / missed cancel_reservation or
+ * update_reservation_*, emit the policy-checklist graph instead of another
+ * generic self-refine / validator step.
  */
-export function applyILoop(start?: AgentGraph): ILoopResult {
+export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoopResult {
   const graphBefore = start ?? tau2Graph("one-shot");
   const techniqueBefore = techniqueOf(graphBefore);
   let graphAfter: AgentGraph;
   let techniqueAfter: Tau2Technique;
   let applied = true;
 
-  if (!graphHas(graphBefore, "critic")) {
+  if (obsNeedsPolicy(obs) && !graphHas(graphBefore, "policy-checklist")) {
+    graphAfter = applyPolicyChecklistMutation(graphBefore, AIRLINE_POLICY_CHECKLIST);
+    techniqueAfter = "policy-checklist";
+  } else if (obsNeedsPolicy(obs)) {
+    graphAfter = graphBefore;
+    techniqueAfter = techniqueBefore;
+    applied = false;
+  } else if (!graphHas(graphBefore, "critic")) {
     graphAfter = applySelfRefineMutation(graphBefore);
     techniqueAfter = "self-refine";
   } else if (!graphHas(graphBefore, "validator")) {

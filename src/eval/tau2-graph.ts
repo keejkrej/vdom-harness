@@ -1,5 +1,6 @@
 import { type AgentGraph, node, graph } from "../ir.js";
 import { type Tau2Technique } from "./tau2-types.js";
+import { AIRLINE_POLICY_CHECKLIST } from "./tau2-policy.js";
 
 const OBJECTIVE =
   "Help the user according to the domain policy. Use tools when needed. Each turn is either a tool call or a message to the user, never both.";
@@ -65,6 +66,32 @@ export function tau2Graph(technique: Tau2Technique = "one-shot", model?: string)
           }),
         ],
       },
+    });
+  }
+
+  if (technique === "policy-checklist") {
+    return graph({
+      id: "tau2-policy-checklist",
+      version: 1,
+      meta: { technique: "policy-checklist", benchmark: "tau2-bench", paper: "airline-policy" },
+      root: node({
+        key: "solve",
+        role: "solve",
+        objective: OBJECTIVE,
+        technique: "policy-checklist",
+        model,
+        children: [
+          node({
+            key: "policy-checklist",
+            kind: "policy",
+            role: "critic",
+            objective: AIRLINE_POLICY_CHECKLIST,
+            prompt: AIRLINE_POLICY_CHECKLIST,
+            technique: "policy-checklist",
+            model,
+          }),
+        ],
+      }),
     });
   }
 

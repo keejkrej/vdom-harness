@@ -4,7 +4,35 @@ import { type Completion, type Message, type ToolSpec } from "../providers.js";
 export const TAU2_PAPER_REPO = "https://github.com/keejkrej/agent-stochastic-dynamics";
 export const TAU2_BENCH_REPO = "https://github.com/sierra-research/tau2-bench";
 
-export type Tau2Technique = "one-shot" | "self-refine" | "reflexion" | "validator";
+export type Tau2Technique =
+  | "one-shot"
+  | "self-refine"
+  | "reflexion"
+  | "validator"
+  | "policy-checklist";
+
+export type Tau2MissedAction = {
+  name: string;
+  arguments?: Record<string, unknown>;
+};
+
+export type Tau2RewardInfo = {
+  reward?: number | null;
+  action_checks?: Array<{
+    action?: { name?: string; arguments?: Record<string, unknown> };
+    name?: string;
+    arguments?: Record<string, unknown>;
+    action_match?: boolean;
+    action_reward?: number;
+    tool_type?: string;
+  }>;
+  communicate_checks?: Array<{ info?: string; met?: boolean; justification?: string }>;
+  nl_assertions?: Array<{ nl_assertion?: string; met?: boolean; justification?: string }>;
+  db_check?: { db_match?: boolean; db_reward?: number } | null;
+  missedActions?: Tau2MissedAction[];
+  reward_basis?: string[];
+  reward_breakdown?: Record<string, number> | null;
+};
 
 export type Tau2TurnRequest = {
   op: "turn";
@@ -46,6 +74,12 @@ export type Tau2Obs = {
   repeatActions: number;
   /** Paper arm Obs should emit: I_loop | I_weight | wait */
   arm?: "I_loop" | "I_weight" | "wait";
+  missedActions?: Tau2MissedAction[];
+  refusedCancel?: boolean;
+  inventedPolicy?: boolean;
+  hung?: boolean;
+  /** Typed I_loop graph when the miss is a refused / never-called cancel or update. */
+  techniqueRecommendation?: Tau2Technique;
 };
 
 export type Tau2SimulationLog = {
@@ -58,6 +92,8 @@ export type Tau2SimulationLog = {
   traces: Trace[];
   obs: Tau2Obs;
   messages?: unknown[];
+  rewardInfo?: Tau2RewardInfo | null;
+  hung?: boolean;
 };
 
 export type Tau2EvalFile = {

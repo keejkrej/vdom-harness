@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,30 @@ METRIC_NOTE = (
 )
 PAPER_REPO = "https://github.com/keejkrej/agent-stochastic-dynamics"
 TAU2_REPO = "https://github.com/sierra-research/tau2-bench"
+# Airline write tools whose miss should select the policy-checklist I_loop graph.
+# Mock update_task_status is intentionally excluded so 0 → 0.5 → 1.0 still holds.
+POLICY_WRITE_TOOLS = frozenset(
+    {
+        "cancel_reservation",
+        "update_reservation_flights",
+        "update_reservation_baggages",
+        "update_reservation_passengers",
+        "book_reservation",
+    }
+)
+_REFUSE_CANCEL = re.compile(
+    r"unable to cancel|cannot cancel|can't cancel|can not cancel|"
+    r"no way for me to|no mechanism|not possible to cancel|"
+    r"i(?:'m| am) unable to|unfortunately.{0,60}cancel|"
+    r"i(?:'m| am) afraid.{0,60}cancel|i(?:'m| am) sorry.{0,60}unable",
+    re.I | re.S,
+)
+_INVENTED_POLICY = re.compile(
+    r"no-?show|no mechanism|i have no (?:way|mechanism)|"
+    r"there is no way for me to|not possible to (?:make|process) (?:a )?no-?show|"
+    r"i have no (?:tool|api) to cancel",
+    re.I,
+)
 
 
 def _has_live_key() -> bool:
@@ -131,17 +156,163 @@ def _actions_from_messages(messages: list[Any]) -> list[dict[str, Any]]:
     return actions
 
 
-def _obs(actions: list[dict[str, Any]], reward: float | None, traces: list[Any]) -> dict[str, Any]:
+def _assistant_text(
+    actions: list[dict[str, Any]],
+    messages: list[Any] | None = None,
+) -> str:
+    parts = [str(a.get("text") or "") for a in actions if a.get("kind") == "text"]
+    for m in messages or []:
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            parts.append(str(m.get("content") or ""))
+        elif getattr(m, "role", None) == "assistant":
+            parts.append(str(getattr(m, "content", "") or ""))
+    return "\n".join(parts)
+
+
+def _missed_actions_from_reward_info(reward_info: Any) -> list[dict[str, Any]]:
+    if reward_info is None:
+        return []
+    if isinstance(reward_info, dict):
+        if reward_info.get("missedActions"):
+            return [
+                {"name": a.get("name"), "arguments": a.get("arguments") or {}}
+                for a in reward_info["missedActions"]
+                if a.get("name")
+            ]
+        checks = reward_info.get("action_checks") or []
+    else:
+        checks = getattr(reward_info, "action_checks", None) or []
+    missed: list[dict[str, Any]] = []
+    for check in checks:
+        if isinstance(check, dict):
+            if check.get("action_match") is not False:
+                continue
+            action = check.get("action") or {}
+            name = action.get("name") or check.get("name")
+            args = action.get("arguments") or check.get("arguments") or {}
+        else:
+            if getattr(check, "action_match", True) is not False:
+                continue
+            action = getattr(check, "action", None)
+            name = getattr(action, "name", None) if action is not None else None
+            args = getattr(action, "arguments", None) if action is not None else {}
+        if name:
+            missed.append({"name": name, "arguments": args or {}})
+    return missed
+
+
+def serialize_reward_info(reward_info: Any) -> dict[str, Any] | None:
+    """Persist tau2 RewardInfo fields Obs needs: checks + which expected tools missed."""
+    if reward_info is None:
+        return None
+    if hasattr(reward_info, "model_dump"):
+        raw = reward_info.model_dump(mode="json")
+    elif isinstance(reward_info, dict):
+        raw = reward_info
+    else:
+        raw = {}
+
+    def _compact_action_check(check: Any) -> dict[str, Any]:
+        if isinstance(check, dict):
+            action = check.get("action") or {}
+            return {
+                "name": action.get("name") or check.get("name"),
+                "arguments": action.get("arguments") or check.get("arguments") or {},
+                "action_match": check.get("action_match"),
+                "action_reward": check.get("action_reward"),
+                "tool_type": check.get("tool_type"),
+            }
+        action = getattr(check, "action", None)
+        return {
+            "name": getattr(action, "name", None) if action is not None else None,
+            "arguments": (getattr(action, "arguments", None) or {}) if action is not None else {},
+            "action_match": getattr(check, "action_match", None),
+            "action_reward": getattr(check, "action_reward", None),
+            "tool_type": getattr(check, "tool_type", None),
+        }
+
+    def _compact_comm(check: Any) -> dict[str, Any]:
+        if isinstance(check, dict):
+            return {
+                "info": check.get("info"),
+                "met": check.get("met"),
+                "justification": check.get("justification"),
+            }
+        return {
+            "info": getattr(check, "info", None),
+            "met": getattr(check, "met", None),
+            "justification": getattr(check, "justification", None),
+        }
+
+    def _compact_nl(check: Any) -> dict[str, Any]:
+        if isinstance(check, dict):
+            return {
+                "nl_assertion": check.get("nl_assertion"),
+                "met": check.get("met"),
+                "justification": check.get("justification"),
+            }
+        return {
+            "nl_assertion": getattr(check, "nl_assertion", None),
+            "met": getattr(check, "met", None),
+            "justification": getattr(check, "justification", None),
+        }
+
+    action_checks = raw.get("action_checks") or getattr(reward_info, "action_checks", None) or []
+    communicate = raw.get("communicate_checks") or getattr(reward_info, "communicate_checks", None) or []
+    nl = raw.get("nl_assertions") or getattr(reward_info, "nl_assertions", None) or []
+    db = raw.get("db_check") if "db_check" in raw else getattr(reward_info, "db_check", None)
+    if db is not None and hasattr(db, "model_dump"):
+        db = db.model_dump(mode="json")
+    missed = _missed_actions_from_reward_info(reward_info)
+    return {
+        "reward": raw.get("reward", getattr(reward_info, "reward", None)),
+        "action_checks": [_compact_action_check(c) for c in action_checks] or None,
+        "communicate_checks": [_compact_comm(c) for c in communicate] or None,
+        "nl_assertions": [_compact_nl(c) for c in nl] or None,
+        "db_check": db,
+        "missedActions": missed,
+        "reward_basis": raw.get("reward_basis") or getattr(reward_info, "reward_basis", None),
+        "reward_breakdown": raw.get("reward_breakdown")
+        or getattr(reward_info, "reward_breakdown", None),
+    }
+
+
+def _obs(
+    actions: list[dict[str, Any]],
+    reward: float | None,
+    traces: list[Any],
+    reward_info: Any = None,
+    hung: bool = False,
+    messages: list[Any] | None = None,
+) -> dict[str, Any]:
     last = [
         a.get("toolName") or f"text:{(a.get('text') or '')[:80]}"
         for a in actions
     ]
     repeats = sum(1 for a in actions if a.get("repeat"))
     failures = sum(1 for a in actions if a.get("ok") is False)
-    p_hit = 1 if reward is not None and reward >= 1 - 1e-6 else 0
+    p_hit = 0 if hung else (1 if reward is not None and reward >= 1 - 1e-6 else 0)
+    blob = _assistant_text(actions, messages)
+    missed = _missed_actions_from_reward_info(reward_info)
+    refused_cancel = bool(_REFUSE_CANCEL.search(blob))
+    invented_policy = bool(_INVENTED_POLICY.search(blob))
+    missed_policy = [a for a in missed if a.get("name") in POLICY_WRITE_TOOLS]
+    recommend_policy = (not p_hit) and (
+        refused_cancel or invented_policy or bool(missed_policy)
+    )
     if p_hit:
         critique = "path measure hits S; wait"
         arm = "wait"
+    elif hung:
+        critique = "trial hung or skipped; keep task in the set (null reward), retry once"
+        arm = "I_loop"
+    elif recommend_policy:
+        names = ", ".join(a["name"] for a in missed_policy) or "cancel/update"
+        critique = (
+            f"user asked cancel/update and agent refused or never called the tool "
+            f"({names}); I_loop policy-checklist"
+        )
+        arm = "I_loop"
     elif failures:
         critique = "tool failures in trajectory; inspect env channel"
         arm = "I_loop"
@@ -160,7 +331,24 @@ def _obs(actions: list[dict[str, Any]], reward: float | None, traces: list[Any])
         "toolFailures": failures,
         "repeatActions": repeats,
         "arm": arm,
+        "missedActions": missed,
+        "refusedCancel": refused_cancel,
+        "inventedPolicy": invented_policy,
+        "hung": hung,
+        "techniqueRecommendation": "policy-checklist" if recommend_policy else None,
     }
+
+
+class HungSimulation:
+    """Placeholder so a skipped trial stays in the requested task set."""
+
+    def __init__(self, task_id: str, trial: int, reason: str = "timeout"):
+        self.task_id = task_id
+        self.trial = trial
+        self.messages: list[Any] = []
+        self.reward_info = None
+        self.termination_reason = reason
+        self.hung = True
 
 
 def write_eval_file(
@@ -187,10 +375,14 @@ def write_eval_file(
     logs = []
     for i, sim in enumerate(simulations):
         reward = None
-        if getattr(sim, "reward_info", None) is not None:
-            reward = float(sim.reward_info.reward)
+        reward_info = getattr(sim, "reward_info", None)
+        if reward_info is not None:
+            reward = float(reward_info.reward)
+        hung = bool(getattr(sim, "hung", False))
         actions = _actions_from_messages(getattr(sim, "messages", []) or [])
         traces = (extra_traces or {}).get(getattr(sim, "task_id", str(i)), [])
+        messages = [_serialize_message(m) for m in (getattr(sim, "messages", []) or [])]
+        compact_ri = serialize_reward_info(reward_info)
         logs.append(
             {
                 "taskId": getattr(sim, "task_id", None),
@@ -203,8 +395,17 @@ def write_eval_file(
                 or str(getattr(sim, "termination_reason", "") or None),
                 "actions": actions,
                 "traces": traces,
-                "obs": _obs(actions, reward, traces),
-                "messages": [_serialize_message(m) for m in (getattr(sim, "messages", []) or [])],
+                "obs": _obs(
+                    actions,
+                    reward,
+                    traces,
+                    reward_info=reward_info,
+                    hung=hung,
+                    messages=messages,
+                ),
+                "rewardInfo": compact_ri,
+                "hung": hung,
+                "messages": messages,
             }
         )
 

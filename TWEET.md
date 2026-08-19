@@ -14,7 +14,7 @@ The clip is a replay of a real TypeScript run, not a mock.
 
 A source compiles to an AgentGraph — a paper is one example.
 One-shot scores 0.00 on "dom virtual".
-The agent observes the miss and emits a replacement graph.
+The agent observes the miss and emits a replacement graph — I_loop is failure-aware (Obs → typed graph), not a fixed technique ladder.
 Reconcile: = solve  + critic  + refine
 Score: 1.00. Output: mod lautriv.
 

@@ -1,7 +1,15 @@
 import { type Trace } from "../ir.js";
 import { type Completion } from "../providers.js";
-import { type Tau2ActionLog, type Tau2Obs } from "./tau2-types.js";
+import { type Tau2ActionLog, type Tau2Obs, type Tau2RewardInfo } from "./tau2-types.js";
 import { recommendIntervention } from "./tau2-improve.js";
+import {
+  detectInventedPolicy,
+  detectRefusedCancel,
+  missedActionsFromRewardInfo,
+  missedPolicyWrites,
+  policyCritique,
+  shouldRecommendPolicy,
+} from "./tau2-policy.js";
 
 export function actionFromCompletion(turn: Completion): Tau2ActionLog {
   const tc = turn.toolCalls?.[0];
@@ -32,6 +40,9 @@ export function observeTau2(opts: {
   actions: Tau2ActionLog[];
   reward: number | null;
   toolFailures?: number;
+  rewardInfo?: Tau2RewardInfo | null;
+  hung?: boolean;
+  messages?: Array<{ role?: string; content?: string }>;
 }): Tau2Obs {
   const actions = markRepeats(opts.actions);
   const lastActions = actions.map((a) =>
@@ -39,15 +50,21 @@ export function observeTau2(opts: {
   );
   const repeatActions = actions.filter((a) => a.repeat).length;
   const toolFailures = opts.toolFailures ?? actions.filter((a) => a.ok === false).length;
-  const pHit = opts.reward != null && opts.reward >= 1 - 1e-6 ? 1 : 0;
-  const critique =
-    pHit === 1
-      ? "path measure hits S; wait"
-      : toolFailures > 0
-        ? "tool failures in trajectory; inspect env channel"
-        : repeatActions > 0
-          ? "repeat actions; loop mutation or wait"
-          : "episode unfinished or miss; inspect cascade / tools";
+  const hung = Boolean(opts.hung);
+  const pHit = hung ? 0 : opts.reward != null && opts.reward >= 1 - 1e-6 ? 1 : 0;
+  const missedActions = missedActionsFromRewardInfo(opts.rewardInfo);
+  const refusedCancel = detectRefusedCancel(actions, opts.messages);
+  const inventedPolicy = detectInventedPolicy(actions, opts.messages);
+  const missedPolicy = missedPolicyWrites(missedActions);
+  const critique = policyCritique({
+    pHit,
+    hung,
+    refusedCancel,
+    inventedPolicy,
+    missedPolicy,
+    toolFailures,
+    repeatActions,
+  });
   const obs: Tau2Obs = {
     nSteps: tracesOrActions(opts.traces, actions),
     nSuccessProxy: pHit,
@@ -56,7 +73,21 @@ export function observeTau2(opts: {
     critique,
     toolFailures,
     repeatActions,
+    missedActions,
+    refusedCancel,
+    inventedPolicy,
+    hung,
   };
+  if (
+    pHit !== 1 &&
+    shouldRecommendPolicy({
+      refusedCancel,
+      inventedPolicy,
+      missedActions,
+    })
+  ) {
+    obs.techniqueRecommendation = "policy-checklist";
+  }
   obs.arm = recommendIntervention(obs);
   return obs;
 }

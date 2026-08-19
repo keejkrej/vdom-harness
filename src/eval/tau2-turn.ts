@@ -8,6 +8,7 @@ import {
 } from "../providers.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { type Tau2Technique } from "./tau2-types.js";
+import { AIRLINE_POLICY_CHECKLIST } from "./tau2-policy.js";
 
 const AGENT_INSTRUCTION = `You are a customer service agent that helps the user according to the policy below.
 In each turn you can either:
@@ -111,6 +112,20 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
       model: opts.model,
     });
     pushTrace(traces, "refine", "refine", input, formatCompletion(acted));
+    return { ...acted, traces };
+  }
+
+  if (technique === "policy-checklist") {
+    const extra =
+      graph.root.children?.find((c) => c.key === "policy-checklist")?.prompt ??
+      AIRLINE_POLICY_CHECKLIST;
+    const actMsgs: Message[] = [systemFor(opts.policy, extra), ...convo];
+    const acted = await completeTurn(provider, actMsgs, {
+      role: "policy-checklist",
+      tools: opts.tools,
+      model: opts.model,
+    });
+    pushTrace(traces, "policy-checklist", "critic", input, formatCompletion(acted));
     return { ...acted, traces };
   }
 
