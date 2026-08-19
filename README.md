@@ -58,6 +58,34 @@ If OPENAI_API_KEY is set, createProvider() uses an OpenAI-compatible chat adapte
 
 Without a key, the deterministic provider stays active.
 
+## Evaluation
+
+Toys in `src/benchmarks.ts` (word-reverse, and friends) are **unit fixtures**. They prove the reconciler and DeterministicProvider, not the agent. The paper that accompanies this runtime is [agent-stochastic-dynamics](https://github.com/keejkrej/agent-stochastic-dynamics). This repo is the submitted runtime.
+
+Established tool–agent–user eval is **[τ²-bench](https://github.com/sierra-research/tau2-bench)** (Yao et al. 2024; Barres et al. 2025). We implement their `HalfDuplexAgent` (`python/tau2_vdom/`) and keep the TypeScript AgentGraph. Each turn calls `runTau2Turn` → `complete()` / `completeTurn()`; official tau2 owns domains, tools, user simulator, orchestrator, and `pass^k`. We do not reimplement retail.
+
+```
+# Fixtures (no key) — already in npm test
+npm test
+
+# Official mock-domain smoke (no key). Installs nothing if tau2 is present.
+bash scripts/setup-tau2.sh
+npm run eval:tau2:smoke
+```
+
+Live retail, OpenRouter, default model `deepseek/deepseek-v4-flash-0731` (not the 0424 preview):
+
+```
+export OPENROUTER_API_KEY=...
+export OPENAI_BASE_URL=https://openrouter.ai/api/v1
+export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
+PYTHONPATH=python python3 -m tau2_vdom --domain retail --num-tasks 5 --num-trials 4
+```
+
+The runner registers `--agent vdom` on the official tau2 registry, then calls `run_domain` / `run_single_task`. Use `python -m tau2_vdom` (not a stock `tau2 run`) so the factory is imported.
+
+Trajectories (actions, tool failures, repeats, reward, `obs` for the paper's `p_hit`) write to `eval/tau2/*.json`. `pass^k` is copied from tau2's `compute_metrics` when a live run finishes — this harness does not invent scores.
+
 ## Limitation
 
 Any source can propose topology, prompts, memory, and routing. The next primitive is already Capability: executable tools still go through that gate — scientist JSON is never trusted as code.
@@ -81,7 +109,9 @@ Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
 - src/providers.ts -- deterministic + OpenAI-compatible
 - src/runtime.ts -- walk the mounted graph, collect traces
 - src/papers.ts -- source text to graph (`compilePaper` / `compileSource`)
-- src/benchmarks.ts -- word-reverse and friends
+- src/benchmarks.ts -- word-reverse fixtures (not the paper eval)
+- src/eval/ -- τ² turn loop, sidecar, Obs logs
+- python/tau2_vdom/ -- official HalfDuplexAgent + runner
 - src/scientist.ts -- evolve the graph from traces
 - src/capability.ts -- approved capability registry + sandbox gate
 - src/trainer.ts -- Trainer port, FakeTrainer, adapter artifacts
@@ -96,3 +126,4 @@ Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
 package.json defines demo, test, build, export, and viz. After installing packages: test then demo.
 
     npm i && npm test && npm run demo
+    npm run eval:tau2:smoke   # official τ² mock domain, no API key

@@ -7,6 +7,8 @@ import {
   registerProvider,
   clearProviderRegistry,
   resolveProvider,
+  resolveChatConfig,
+  DEFAULT_OPENROUTER_MODEL,
   type Provider,
   type Message,
   type CompleteOpts,
@@ -292,6 +294,8 @@ async function testModelBinding(): Promise<void> {
   const fb = new DeterministicProvider();
   assert(providerForNode(noModel.root, fb) === fb, "missing model uses fallback provider");
   assertEq(resolveProvider(undefined).name, "deterministic", "resolveProvider() default is deterministic without key");
+  assertEq(resolveChatConfig(), null, "no API key → resolveChatConfig is null");
+  assertEq(DEFAULT_OPENROUTER_MODEL, "deepseek/deepseek-v4-flash-0731", "default OpenRouter model is 0731");
 
   // Object-form model binds via intelligence.
   const objGraph = graph({

@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "demo": "tsx src/demo.ts",
-    "test": "tsx src/selftest.ts",
+    "test": "tsx src/selftest.ts && tsx src/eval/tau2-selftest.ts",
     "build": "tsc --noEmit",
     "export": "tsx src/export-run.ts",
-    "viz": "tsx src/serve.ts"
+    "viz": "tsx src/serve.ts",
+    "eval:tau2": "PYTHONPATH=python python3 -m tau2_vdom",
+    "eval:tau2:smoke": "PYTHONPATH=python python3 -m tau2_vdom --domain mock --smoke"
   },
   "engines": {
     "node": ">=18"
