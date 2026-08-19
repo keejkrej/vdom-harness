@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from tau2_vdom.improve import (
+    _collect_obs,
     _task_p_hit,
+    apply_scope_from_obs,
     missed_tool_names_only,
     pass_hat_k_from_rewards,
 )
@@ -156,6 +158,55 @@ def test_strip_kernel_self_tools_never_reach_env() -> None:
     assert executed == ["create_task"]
 
 
+def test_obs_includes_task_id() -> None:
+    obs = _obs(
+        [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
+        1.0,
+        [],
+        task_id="44",
+    )
+    assert obs["taskId"] == "44"
+    assert obs["arm"] == "wait"
+    assert obs["nSuccessProxy"] == 1
+
+
+def test_apply_scope_mixed_wait_hit() -> None:
+    scope = apply_scope_from_obs(
+        [
+            {"taskId": "44", "arm": "wait", "nSuccessProxy": 1, "hung": False},
+            {"taskId": "39", "arm": "I_loop", "nSuccessProxy": 0, "hung": False},
+        ]
+    )
+    assert scope == {"waitKept": ["44"], "looped": ["39"]}
+    record = {"selfObsPath": "self", "applyScope": scope}
+    assert record["selfObsPath"] == "self"
+    assert record["applyScope"]["waitKept"] == ["44"]
+    assert record["applyScope"]["looped"] == ["39"]
+
+
+def test_collect_obs_sets_task_id() -> None:
+    from types import SimpleNamespace
+
+    hit = SimpleNamespace(
+        task_id="44",
+        messages=[],
+        hung=False,
+        reward_info=SimpleNamespace(reward=1.0),
+    )
+    miss = SimpleNamespace(
+        task_id="39",
+        messages=[],
+        hung=False,
+        reward_info=SimpleNamespace(reward=0.0),
+    )
+    obs = _collect_obs([hit, miss])
+    assert obs[0]["taskId"] == "44"
+    assert obs[0]["arm"] == "wait"
+    assert obs[1]["taskId"] == "39"
+    assert obs[1]["arm"] == "I_loop"
+    assert apply_scope_from_obs(obs) == {"waitKept": ["44"], "looped": ["39"]}
+
+
 def test_hit_still_waits() -> None:
     obs = _obs(
         [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
@@ -176,6 +227,9 @@ def main() -> int:
         test_obs_personal_reason_is_invented_policy,
         test_missed_tool_names_only_drops_gold_ids,
         test_strip_kernel_self_tools_never_reach_env,
+        test_obs_includes_task_id,
+        test_apply_scope_mixed_wait_hit,
+        test_collect_obs_sets_task_id,
         test_hit_still_waits,
     ]
     failed = 0

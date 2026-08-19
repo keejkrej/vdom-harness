@@ -287,6 +287,7 @@ def _obs(
     reward_info: Any = None,
     hung: bool = False,
     messages: list[Any] | None = None,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     last = [
         a.get("toolName") or f"text:{(a.get('text') or '')[:80]}"
@@ -339,6 +340,7 @@ def _obs(
         "inventedPolicy": invented_policy,
         "hung": hung,
         "techniqueRecommendation": "policy-checklist" if recommend_policy else None,
+        "taskId": str(task_id) if task_id else None,
     }
 
 
@@ -405,6 +407,7 @@ def write_eval_file(
                     reward_info=reward_info,
                     hung=hung,
                     messages=messages,
+                    task_id=str(getattr(sim, "task_id", "") or "") or None,
                 ),
                 "rewardInfo": compact_ri,
                 "hung": hung,

@@ -118,6 +118,7 @@ class VdomAgent(HalfDuplexAgent["VdomAgentState"]):
         # Re-read env each turn so I_loop can swap technique without restarting serving.
         # get/set_agent_graph are intercepted in the sidecar; strip if they leak.
         technique = os.environ.get("VDOM_TAU2_TECHNIQUE") or self.technique
+        task_id = os.environ.get("VDOM_TAU2_TASK_ID") or self.task_id
         payload = {
             "op": "turn",
             "policy": self.domain_policy,
@@ -126,12 +127,14 @@ class VdomAgent(HalfDuplexAgent["VdomAgentState"]):
             "technique": technique,
             "model": self.llm,
         }
+        if task_id:
+            payload["taskId"] = str(task_id)
         data = self._sidecar.request(payload)
         traces = data.get("traces") or []
         state.traces.extend(traces)
         self.last_traces = traces
         TURN_TRACES.extend(traces)
-        key = self.task_id or "_"
+        key = str(task_id or self.task_id or "_")
         TURN_TRACES_BY_TASK.setdefault(key, []).extend(traces)
 
         tool_calls_raw = strip_kernel_self_tools(data.get("tool_calls") or [])

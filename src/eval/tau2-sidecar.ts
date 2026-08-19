@@ -9,7 +9,12 @@
 import { createProvider, DeterministicProvider, type Message, type ToolSpec } from "../providers.js";
 import { filterGymToolCalls, runTau2Turn } from "./tau2-turn.js";
 import { type AgentGraph } from "../ir.js";
-import { techniqueOfGraph } from "./tau2-improve.js";
+import {
+  selectServingGraph,
+  servingTechnique,
+  techniqueOfGraph,
+  type ApplyScope,
+} from "./tau2-improve.js";
 import {
   FakeTrainer,
   SurrogateTrainer,
@@ -48,6 +53,8 @@ type Incoming = {
   trainer?: TrainerKind;
   jobId?: string;
   baseModel?: string;
+  taskId?: string;
+  taskIds?: string[];
 };
 
 type SidecarReply = Tau2TurnResponse & {
@@ -64,6 +71,7 @@ type SidecarReply = Tau2TurnResponse & {
   rationale?: string;
   applied?: boolean;
   graphEdits?: unknown;
+  applyScope?: ApplyScope;
 };
 
 function providerFor(model?: string): ReturnType<typeof createProvider> {
@@ -75,6 +83,26 @@ function providerFor(model?: string): ReturnType<typeof createProvider> {
 
 let currentTechnique: Tau2Technique = "one-shot";
 let currentGraph: AgentGraph = tau2Graph("one-shot");
+let graphC0: AgentGraph = currentGraph;
+let graphC1: AgentGraph | undefined;
+let applyScope: ApplyScope | undefined;
+
+function resetApplyScope(): void {
+  applyScope = undefined;
+  graphC1 = undefined;
+  graphC0 = currentGraph;
+}
+
+function liveGraph(taskId?: string, reqGraph?: AgentGraph): AgentGraph {
+  return selectServingGraph({
+    taskId,
+    reqGraph,
+    currentGraph,
+    graphBefore: graphC0,
+    graphAfter: graphC1 ?? currentGraph,
+    applyScope,
+  });
+}
 
 function write(obj: SidecarReply): void {
   process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -83,6 +111,7 @@ function write(obj: SidecarReply): void {
 function setTechnique(next: Tau2Technique, graph?: AgentGraph): void {
   currentTechnique = next;
   currentGraph = graph ?? tau2Graph(next);
+  resetApplyScope();
 }
 
 async function handle(line: string): Promise<void> {
@@ -143,19 +172,29 @@ async function handle(line: string): Promise<void> {
       rewards: req.rewards,
       terminations: req.terminations,
       missedToolNames: req.missedToolNames,
+      taskIds: req.taskIds,
       obs: req.obs,
       provider: providerFor(req.model),
       model: req.model,
     });
+    applyScope = result.applyScope;
+    graphC0 = result.graphBefore;
+    graphC1 = result.applied ? result.graphAfter : undefined;
     if (result.applied) {
-      currentTechnique = result.techniqueAfter;
-      currentGraph = result.graphAfter;
+      if (result.applyScope && result.applyScope.waitKept.length > 0) {
+        // Mixed batch: default C stays C0. Never a silent global mount.
+        currentGraph = result.graphBefore;
+        currentTechnique = techniqueOfGraph(result.graphBefore);
+      } else {
+        currentTechnique = result.techniqueAfter;
+        currentGraph = result.graphAfter;
+      }
     }
     write({
       op: "ok",
       id,
-      technique: currentTechnique,
-      graph: currentGraph,
+      technique: result.applied ? result.techniqueAfter : currentTechnique,
+      graph: result.applied ? result.graphAfter : currentGraph,
       graphDiff: result.graphDiff,
       servingPaused: false,
       content: result.applied ? "applied" : result.action === "wait" ? "wait" : "exhausted",
@@ -163,6 +202,7 @@ async function handle(line: string): Promise<void> {
       action: result.action,
       rationale: result.rationale,
       applied: result.applied,
+      applyScope: result.applyScope,
     });
     return;
   }
@@ -243,11 +283,13 @@ async function handle(line: string): Promise<void> {
   }
 
   try {
-    const live = req.graph ?? currentGraph;
-    const technique =
-      live.meta?.selfEdit === true
-        ? techniqueOfGraph(live)
-        : (req.technique ?? currentTechnique);
+    const live = liveGraph(req.taskId, req.graph);
+    const technique = servingTechnique(live, {
+      taskId: req.taskId,
+      applyScope,
+      reqTechnique: req.technique,
+      currentTechnique,
+    });
     const result = await runTau2Turn({
       policy: req.policy ?? "",
       tools: req.tools ?? [],
@@ -257,8 +299,18 @@ async function handle(line: string): Promise<void> {
       model: req.model,
       provider: req.model === "deterministic" ? new DeterministicProvider() : createProvider(),
     });
-    currentGraph = result.graph;
-    currentTechnique = techniqueOfGraph(result.graph);
+    if (req.taskId && applyScope?.waitKept.includes(req.taskId)) {
+      graphC0 = result.graph;
+    } else if (req.taskId && applyScope?.looped.includes(req.taskId)) {
+      graphC1 = result.graph;
+      currentGraph = result.graph;
+      currentTechnique = techniqueOfGraph(result.graph);
+    } else if (!(applyScope && applyScope.waitKept.length > 0)) {
+      currentGraph = result.graph;
+      currentTechnique = techniqueOfGraph(result.graph);
+    } else {
+      graphC0 = result.graph;
+    }
     for (const edit of result.graphEdits) {
       process.stderr.write(
         `graph-tool ${edit.tool} ${edit.rejected ? "rejected" : "applied"} ${edit.reason}\n`,
