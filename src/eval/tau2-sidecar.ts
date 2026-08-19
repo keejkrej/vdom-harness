@@ -7,8 +7,9 @@
  * false. 0731 cannot take an adapter — default trainer is SurrogateTrainer.
  */
 import { createProvider, DeterministicProvider, type Message, type ToolSpec } from "../providers.js";
-import { runTau2Turn } from "./tau2-turn.js";
+import { filterGymToolCalls, runTau2Turn } from "./tau2-turn.js";
 import { type AgentGraph } from "../ir.js";
+import { techniqueOfGraph } from "./tau2-improve.js";
 import {
   FakeTrainer,
   SurrogateTrainer,
@@ -62,6 +63,7 @@ type SidecarReply = Tau2TurnResponse & {
   action?: "wait" | "I_loop";
   rationale?: string;
   applied?: boolean;
+  graphEdits?: unknown;
 };
 
 function providerFor(model?: string): ReturnType<typeof createProvider> {
@@ -241,23 +243,37 @@ async function handle(line: string): Promise<void> {
   }
 
   try {
-    const technique = req.technique ?? currentTechnique;
+    const live = req.graph ?? currentGraph;
+    const technique =
+      live.meta?.selfEdit === true
+        ? techniqueOfGraph(live)
+        : (req.technique ?? currentTechnique);
     const result = await runTau2Turn({
       policy: req.policy ?? "",
       tools: req.tools ?? [],
       messages: req.messages ?? [],
       technique,
-      graph: req.graph ?? currentGraph,
+      graph: live,
       model: req.model,
       provider: req.model === "deterministic" ? new DeterministicProvider() : createProvider(),
     });
+    currentGraph = result.graph;
+    currentTechnique = techniqueOfGraph(result.graph);
+    for (const edit of result.graphEdits) {
+      process.stderr.write(
+        `graph-tool ${edit.tool} ${edit.rejected ? "rejected" : "applied"} ${edit.reason}\n`,
+      );
+    }
+    const gymCalls = filterGymToolCalls(result.toolCalls);
     write({
       op: "ok",
       id,
       content: result.content,
-      tool_calls: result.toolCalls,
+      tool_calls: gymCalls,
       traces: result.traces,
-      technique,
+      technique: currentTechnique,
+      graph: currentGraph,
+      graphEdits: result.graphEdits,
       servingPaused: false,
     });
   } catch (err) {

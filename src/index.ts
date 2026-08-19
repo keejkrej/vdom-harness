@@ -17,3 +17,4 @@ export * from "./eval/tau2-improve.js";
 export * from "./eval/tau2-turn.js";
 export * from "./eval/tau2-kernel.js";
 export * from "./eval/tau2-self-obs.js";
+export * from "./eval/tau2-graph-tools.js";

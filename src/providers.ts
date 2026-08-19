@@ -403,8 +403,12 @@ function transcript(msgs: Message[]): string {
     .join("\n");
 }
 
+function isKernelSelfTool(name?: string): boolean {
+  return name === "get_agent_graph" || name === "set_agent_graph";
+}
+
 function lastToolMessage(msgs: Message[]): Message | undefined {
-  return [...msgs].reverse().find((m) => m.role === "tool");
+  return [...msgs].reverse().find((m) => m.role === "tool" && !isKernelSelfTool(m.name));
 }
 
 function lastAssistantToolName(msgs: Message[]): string | undefined {

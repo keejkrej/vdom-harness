@@ -473,6 +473,10 @@ async function testVisibleKernelC(): Promise<void> {
   assert(sys.includes("solve"), "runTau2Turn system contains oneshot key solve");
   assert(/kernel C/i.test(sys), "system names kernel C");
   assert(sys.includes("You are this AgentGraph"), "system says you are this graph");
+  assert(sys.includes("get_agent_graph"), "system names get_agent_graph");
+  assert(sys.includes("set_agent_graph"), "system names set_agent_graph");
+  assert(sys.includes("You may read and rewrite your own graph"), "willingness: may rewrite C");
+  assert(sys.includes("get_agent_graph before set_agent_graph"), "willingness: get before set");
   assert(systems.every((s) => s.includes("solve") && s.includes(graph.id)), "every system dump includes C");
   assertEq(turn.toolCalls?.[0]?.name, "create_task", "oneshot still scripts create_task");
 }
@@ -634,6 +638,142 @@ async function testMockSelfObsLadder(): Promise<void> {
   assertEq(r2.graphAfter.version, r1.graphAfter.version, "wait keeps version");
 }
 
+function fakeEnvExecutor(calls?: Array<{ name: string }>): string[] {
+  const executed: string[] = [];
+  for (const c of calls ?? []) {
+    if (c.name === "get_agent_graph" || c.name === "set_agent_graph") {
+      throw new Error(`leaked ${c.name} to env`);
+    }
+    executed.push(c.name);
+  }
+  return executed;
+}
+
+async function testGetThenSetChangesGraph(): Promise<void> {
+  const listed: string[][] = [];
+  const provider: Provider = {
+    name: "get-then-set",
+    async complete() {
+      return "";
+    },
+    async completeTurn(msgs, opts) {
+      listed.push((opts?.tools ?? []).map((t) => t.name));
+      const lastTool = [...msgs].reverse().find((m) => m.role === "tool");
+      if (!lastTool) {
+        return { content: "", toolCalls: [{ id: "g1", name: "get_agent_graph", arguments: {} }] };
+      }
+      if (lastTool.name === "get_agent_graph") {
+        assert(lastTool.content.includes("solve"), "get_agent_graph returns live key solve");
+        assert(!hasGoldReservationId(lastTool.content), "get payload has no gold IDs");
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "s1",
+              name: "set_agent_graph",
+              arguments: {
+                graphPatch: {
+                  technique: "self-refine",
+                  nodes: [
+                    {
+                      key: "live-critic",
+                      role: "critic",
+                      objective: "Critique the next tool from this miss",
+                      prompt: "Name the correct write tool. Do not invent reservation IDs.",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        };
+      }
+      if (lastTool.name === "set_agent_graph") {
+        const body = lastTool.content;
+        assert(body.includes("applied") || body.includes("live-critic"), "set result mentions apply/key");
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "c1",
+              name: "create_task",
+              arguments: { user_id: "user_1", title: "Important Meeting" },
+            },
+          ],
+        };
+      }
+      return { content: "ok" };
+    },
+  };
+
+  const turn = await runTau2Turn({
+    policy: "Create tasks when asked.",
+    tools: [{ name: "create_task", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "Please create a task called Important Meeting for user_1." }],
+    provider,
+    technique: "one-shot",
+    graph: tau2Graph("one-shot"),
+  });
+  assert(listed.some((ts) => ts.includes("get_agent_graph") && ts.includes("set_agent_graph")), "kernel tools on the list");
+  assert(graphHas(turn.graph, "live-critic"), "set_agent_graph mounted new node key");
+  assertEq(turn.servingPaused, false, "servingPaused stays false after set");
+  const setEdit = turn.graphEdits.find((e) => e.tool === "set_agent_graph");
+  assert(setEdit?.applied === true, "set logged applied");
+  assert(setEdit?.rejected === false, "set not rejected");
+  const executed = fakeEnvExecutor(turn.toolCalls);
+  assertEq(executed[0], "create_task", "gym tool after get/set; kernel names never reach env");
+  assert(!(turn.toolCalls ?? []).some((t) => t.name === "get_agent_graph" || t.name === "set_agent_graph"), "kernel tools stripped from result");
+}
+
+async function testSetRejectsGoldIds(): Promise<void> {
+  const provider: Provider = {
+    name: "set-gold",
+    async complete() {
+      return "";
+    },
+    async completeTurn(msgs) {
+      const lastTool = [...msgs].reverse().find((m) => m.role === "tool");
+      if (!lastTool) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "s-gold",
+              name: "set_agent_graph",
+              arguments: {
+                graphPatch: {
+                  nodes: [
+                    {
+                      key: "policy-checklist",
+                      role: "critic",
+                      prompt: "Cancel reservation MSJ4OA then S61CZX.",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        };
+      }
+      return { content: "I will follow the policy." };
+    },
+  };
+  const start = tau2Graph("one-shot");
+  const turn = await runTau2Turn({
+    policy: "policy",
+    tools: [{ name: "create_task" }],
+    messages: [{ role: "user", content: "hello" }],
+    provider,
+    technique: "one-shot",
+    graph: start,
+  });
+  const setEdit = turn.graphEdits.find((e) => e.tool === "set_agent_graph");
+  assert(setEdit?.rejected === true, "gold ID payload rejected");
+  assert(setEdit?.applied === false, "gold ID set not applied");
+  assert(!graphHas(turn.graph, "policy-checklist"), "rejected set does not mount a node");
+  fakeEnvExecutor(turn.toolCalls);
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -659,6 +799,8 @@ async function main(): Promise<void> {
     ["no gold IDs in new prompts", testNoGoldIdsInNewPrompts],
     ["invalid self-Obs JSON uses fallback checklist", testSelfObsFallbackInvalidJson],
     ["mock scripted self-Obs still 0 → 0.5 → 1.0", testMockSelfObsLadder],
+    ["get then set changes graph; env never sees kernel tools", testGetThenSetChangesGraph],
+    ["set_agent_graph rejects gold reservation IDs", testSetRejectsGoldIds],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

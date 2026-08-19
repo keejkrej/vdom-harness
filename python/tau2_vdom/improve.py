@@ -58,9 +58,9 @@ SATURATED_NOTE = (
 CLAIM = (
     "Closed loop: self-observe → I_loop or I_weight → run again → self-observe, "
     "until pass^k saturates or the round budget. Serving does not pause. "
-    "The agent sees kernel C on the fast clock and may rewrite C on the slow-clock "
-    "Obs; I_loop is no longer only a host technique ladder. Canned airline "
-    "checklist is fallback when self-Obs JSON is invalid. "
+    "The agent may get_agent_graph / set_agent_graph mid-turn (local intercept) "
+    "and may rewrite C on the slow-clock Obs; host I_loop is fallback if it never "
+    "called set. Canned airline checklist is fallback when self-Obs JSON is invalid. "
     "Not the saturated 5×4 retail one-shot pass^k=1.0."
 )
 SKIP_POLICY = (
