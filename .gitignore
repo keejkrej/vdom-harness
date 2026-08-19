@@ -1,3 +1,9 @@
 node_modules/
 dist/
 *.log
+.tau2-bench/
+**/__pycache__/
+*.pyc
+eval/tau2/*.json
+!eval/tau2/.gitkeep
+!eval/tau2/latest-smoke.json

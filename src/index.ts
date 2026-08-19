@@ -9,3 +9,7 @@ export * from "./capability.js";
 export * from "./trainer.js";
 export * from "./lifecycle.js";
 export * from "./improve.js";
+export * from "./eval/tau2-types.js";
+export * from "./eval/tau2-graph.js";
+export * from "./eval/tau2-obs.js";
+export * from "./eval/tau2-turn.js";

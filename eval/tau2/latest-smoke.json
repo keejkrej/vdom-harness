@@ -1,0 +1,223 @@
+{
+  "benchmark": "tau2-bench",
+  "domain": "mock",
+  "agent": "vdom",
+  "model": "deterministic",
+  "provider": "deterministic",
+  "technique": "one-shot",
+  "paperRepo": "https://github.com/keejkrej/agent-stochastic-dynamics",
+  "tau2Repo": "https://github.com/sierra-research/tau2-bench",
+  "metricNote": "pass^k is reliability across k independent trials (Yao et al. 2024; Barres et al. 2025). The accompanying paper treats pass^k as first-passage p_hit.",
+  "live": false,
+  "smoke": true,
+  "passHatK": {
+    "1": 1.0
+  },
+  "avgReward": 1.0,
+  "simulations": [
+    {
+      "taskId": "create_task_1",
+      "trial": null,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop",
+      "actions": [
+        {
+          "kind": "text",
+          "text": "Hi! How can I help you today?",
+          "ok": true,
+          "repeat": false
+        },
+        {
+          "kind": "tool",
+          "text": "create_task",
+          "toolName": "create_task",
+          "toolArgs": {
+            "user_id": "user_1",
+            "title": "Important Meeting"
+          },
+          "ok": true,
+          "repeat": false
+        },
+        {
+          "kind": "text",
+          "text": "The task was created successfully.",
+          "ok": true,
+          "repeat": false
+        }
+      ],
+      "traces": [
+        {
+          "nodeKey": "solve",
+          "role": "solve",
+          "input": "Please create a new task called Important Meeting for user_1.",
+          "output": "create_task({\"user_id\":\"user_1\",\"title\":\"Important Meeting\"})",
+          "ts": 1787125554591
+        },
+        {
+          "nodeKey": "solve",
+          "role": "solve",
+          "input": "{\"task_id\": \"task_2\", \"title\": \"Important Meeting\", \"description\": null, \"status\": \"pending\"}",
+          "output": "The task was created successfully.",
+          "ts": 1787125554592
+        }
+      ],
+      "obs": {
+        "nSteps": 3,
+        "nSuccessProxy": 1,
+        "lastActions": [
+          "text:Hi! How can I help you today?",
+          "create_task",
+          "text:The task was created successfully."
+        ],
+        "channels": [
+          "env"
+        ],
+        "critique": "path measure hits S; wait",
+        "toolFailures": 0,
+        "repeatActions": 0
+      },
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hi! How can I help you today?",
+          "tool_calls": null,
+          "is_audio": false,
+          "turn_idx": 0,
+          "timestamp": "2026-08-19T07:45:54.277129",
+          "cost": 0.0,
+          "usage": null,
+          "raw_data": null,
+          "generation_time_seconds": null,
+          "audio_format": null,
+          "audio_path": null,
+          "audio_script_gold": null,
+          "speech_effects": null,
+          "source_effects": null,
+          "channel_effects": null,
+          "turn_taking_action": null,
+          "utterance_ids": null,
+          "chunk_id": null,
+          "is_final_chunk": true,
+          "source": null,
+          "contains_speech": true
+        },
+        {
+          "role": "user",
+          "content": "Please create a new task called Important Meeting for user_1.",
+          "tool_calls": null,
+          "is_audio": false,
+          "turn_idx": 1,
+          "timestamp": "2026-08-19T07:45:54.277210",
+          "cost": null,
+          "usage": null,
+          "raw_data": null,
+          "generation_time_seconds": null,
+          "audio_format": null,
+          "audio_path": null,
+          "audio_script_gold": null,
+          "speech_effects": null,
+          "source_effects": null,
+          "channel_effects": null,
+          "turn_taking_action": null,
+          "utterance_ids": null,
+          "chunk_id": null,
+          "is_final_chunk": true,
+          "source": null,
+          "contains_speech": true
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_create_task_1",
+              "name": "create_task",
+              "arguments": {
+                "user_id": "user_1",
+                "title": "Important Meeting"
+              },
+              "requestor": "assistant"
+            }
+          ],
+          "is_audio": false,
+          "turn_idx": 2,
+          "timestamp": "2026-08-19T07:45:54.591619",
+          "cost": null,
+          "usage": null,
+          "raw_data": null,
+          "generation_time_seconds": null,
+          "audio_format": null,
+          "audio_path": null,
+          "audio_script_gold": null,
+          "speech_effects": null,
+          "source_effects": null,
+          "channel_effects": null,
+          "turn_taking_action": null,
+          "utterance_ids": null,
+          "chunk_id": null,
+          "is_final_chunk": true,
+          "source": null,
+          "contains_speech": true
+        },
+        {
+          "id": "call_create_task_1",
+          "role": "tool",
+          "content": "{\"task_id\": \"task_2\", \"title\": \"Important Meeting\", \"description\": null, \"status\": \"pending\"}",
+          "requestor": "assistant",
+          "error": false,
+          "turn_idx": 3,
+          "timestamp": "2026-08-19T07:45:54.592011"
+        },
+        {
+          "role": "assistant",
+          "content": "The task was created successfully.",
+          "tool_calls": null,
+          "is_audio": false,
+          "turn_idx": 4,
+          "timestamp": "2026-08-19T07:45:54.592321",
+          "cost": null,
+          "usage": null,
+          "raw_data": null,
+          "generation_time_seconds": null,
+          "audio_format": null,
+          "audio_path": null,
+          "audio_script_gold": null,
+          "speech_effects": null,
+          "source_effects": null,
+          "channel_effects": null,
+          "turn_taking_action": null,
+          "utterance_ids": null,
+          "chunk_id": null,
+          "is_final_chunk": true,
+          "source": null,
+          "contains_speech": true
+        },
+        {
+          "role": "user",
+          "content": "###STOP###",
+          "tool_calls": null,
+          "is_audio": false,
+          "turn_idx": 5,
+          "timestamp": "2026-08-19T07:45:54.592392",
+          "cost": null,
+          "usage": null,
+          "raw_data": null,
+          "generation_time_seconds": null,
+          "audio_format": null,
+          "audio_path": null,
+          "audio_script_gold": null,
+          "speech_effects": null,
+          "source_effects": null,
+          "channel_effects": null,
+          "turn_taking_action": null,
+          "utterance_ids": null,
+          "chunk_id": null,
+          "is_final_chunk": true,
+          "source": null,
+          "contains_speech": true
+        }
+      ]
+    }
+  ]
+}
