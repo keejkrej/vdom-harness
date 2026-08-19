@@ -1,0 +1,165 @@
+{
+  "benchmark": "tau2-bench",
+  "kind": "runtime-self-improvement",
+  "closedLoop": true,
+  "live": true,
+  "domain": "airline",
+  "taskIds": [
+    "39",
+    "44",
+    "41"
+  ],
+  "numTrials": 1,
+  "maxRounds": 3,
+  "maxSteps": 80,
+  "trialTimeoutS": 480,
+  "model": "deepseek/deepseek-v4-flash-0731",
+  "userLlm": "openrouter/deepseek/deepseek-v4-flash-0731",
+  "nlAssertionJudge": "openrouter/deepseek/deepseek-v4-flash-0731",
+  "provider": "openrouter",
+  "agent": "vdom",
+  "stopReason": "loop-exhausted",
+  "servingPaused": false,
+  "passHatKBefore": {
+    "1": 0.3333333333333333
+  },
+  "passHatKAfter": {
+    "1": 0.3333333333333333
+  },
+  "pHitSequence": [
+    0.3333333333333333,
+    0.0,
+    0.3333333333333333
+  ],
+  "avgRewardBefore": 0.3333333333333333,
+  "avgRewardAfter": 0.3333333333333333,
+  "interventions": [
+    "I_loop",
+    "I_loop"
+  ],
+  "graphDiffs": [
+    [
+      {
+        "op": "retain",
+        "key": "solve"
+      },
+      {
+        "op": "mount",
+        "key": "critic",
+        "parentKey": "solve"
+      },
+      {
+        "op": "mount",
+        "key": "refine",
+        "parentKey": "critic"
+      }
+    ],
+    [
+      {
+        "op": "retain",
+        "key": "solve"
+      },
+      {
+        "op": "retain",
+        "key": "critic",
+        "parentKey": "solve"
+      },
+      {
+        "op": "retain",
+        "key": "refine",
+        "parentKey": "critic"
+      },
+      {
+        "op": "mount",
+        "key": "validator",
+        "parentKey": "solve"
+      }
+    ]
+  ],
+  "rounds": [
+    {
+      "round": 0,
+      "technique": "one-shot",
+      "pHit": 0.3333333333333333,
+      "passHatK": {
+        "1": 0.3333333333333333
+      },
+      "taskPHit": {
+        "39": 0.0,
+        "41": 1.0,
+        "44": 0.0
+      },
+      "intervention": null,
+      "skipped": []
+    },
+    {
+      "round": 1,
+      "technique": "self-refine",
+      "pHit": 0.0,
+      "passHatK": {
+        "1": 0.0
+      },
+      "taskPHit": {
+        "39": 0.0,
+        "44": 0.0
+      },
+      "intervention": "I_loop",
+      "skipped": [
+        "41:t0"
+      ],
+      "skipReason": "task 41 hung > 480s; excluded from that round's pass^k"
+    },
+    {
+      "round": 2,
+      "technique": "validator",
+      "pHit": 0.3333333333333333,
+      "passHatK": {
+        "1": 0.3333333333333333
+      },
+      "taskPHit": {
+        "39": 0.0,
+        "41": 1.0,
+        "44": 0.0
+      },
+      "intervention": "I_loop",
+      "skipped": []
+    }
+  ],
+  "probe": {
+    "easyAirline012": {
+      "hits": [
+        "0",
+        "1",
+        "2"
+      ],
+      "fails": [],
+      "note": "all 1.0 one-shot; not used"
+    },
+    "hardAirline231839": {
+      "hits": [
+        "23",
+        "18"
+      ],
+      "fails": [
+        "39"
+      ]
+    },
+    "hardAirline444241": {
+      "hits": [
+        "42"
+      ],
+      "fails": [
+        "44",
+        "41"
+      ]
+    }
+  },
+  "honestNote": "I_loop (self-refine, then validator) did not raise p_hit vs naive one-shot on this 3-task slice. Round-1 pHit=0.0 is a smaller denominator (task 41 skipped after 8 min hang). Tasks 39 and 44 stayed 0.0 every completed trial. Not invented.",
+  "gpt41Leakage": "none observed. LiteLLM user-sim logs show model=deepseek/deepseek-v4-flash-0731 custom_llm_provider=openrouter. Airline reward_basis is DB+COMMUNICATE so EvaluationType.ALL does not call the NL-assertion judge. tau2 display 'LLM Judge Review' is an empty table (0 errors), not a gpt-4.1 call.",
+  "command": "PYTHONPATH=python python3 -m tau2_vdom.improve --domain airline --task-ids 39 44 41 --num-trials 1 --max-rounds 3 --max-steps 80 --trial-timeout 480 --model deepseek/deepseek-v4-flash-0731",
+  "sourceFile": "eval/tau2/improve-airline-20260819T121139Z.json",
+  "startedAt": "2026-08-19T11:36:46Z",
+  "finishedAt": "2026-08-19T12:11:39Z",
+  "finishedCEST": "2026-08-19 14:11 CEST",
+  "elapsedS": 2093
+}

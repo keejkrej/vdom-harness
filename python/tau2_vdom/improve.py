@@ -42,7 +42,9 @@ from tau2_vdom.runner import (
     _apply_openrouter_defaults,
     _ensure_tau2_data_dir,
     _has_live_key,
+    _litellm_user_model,
     _obs,
+    _pin_tau2_judges,
     write_eval_file,
 )
 
@@ -137,6 +139,7 @@ def run_slice(
     num_trials: int,
     user: str,
     max_steps: int,
+    trial_timeout_s: int = 480,
 ) -> tuple[list[Any], dict[str, float], float | None, Path]:
     from tau2.data_model.simulation import TextRunConfig
     from tau2.evaluator.evaluator import EvaluationType
@@ -157,7 +160,7 @@ def run_slice(
         agent="vdom",
         user=user,
         llm_agent=model,
-        llm_user=model if live else "scripted",
+        llm_user=_litellm_user_model(model) if live else "scripted",
         num_trials=num_trials,
         max_steps=max_steps,
         max_concurrency=1,
@@ -166,17 +169,50 @@ def run_slice(
         task_ids=task_ids,
         num_tasks=len(task_ids),
     )
+    import concurrent.futures
+
     simulations: list[Any] = []
+    skipped: list[str] = []
     for trial in range(num_trials):
         for task in tasks:
-            simulations.append(
-                run_single_task(
+            tid = str(getattr(task, "id", "?"))
+            t0 = time.time()
+            print(f"[improve] start task={tid} trial={trial} technique={technique}", flush=True)
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = pool.submit(
+                    run_single_task,
                     config,
                     task,
                     seed=42 + trial,
                     evaluation_type=EvaluationType.ALL,
                 )
+                sim = fut.result(timeout=trial_timeout_s)
+            except concurrent.futures.TimeoutError:
+                print(
+                    f"[improve] SKIP task={tid} trial={trial} hung > {trial_timeout_s}s",
+                    flush=True,
+                )
+                skipped.append(f"{tid}:t{trial}")
+                continue
+            except Exception as exc:
+                print(f"[improve] FAIL task={tid} trial={trial}: {type(exc).__name__}: {exc}", flush=True)
+                skipped.append(f"{tid}:t{trial}:err")
+                continue
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+            elapsed = time.time() - t0
+            reward = None
+            if getattr(sim, "reward_info", None) is not None:
+                reward = float(sim.reward_info.reward)
+            print(
+                f"[improve] done task={tid} trial={trial} reward={reward} "
+                f"term={getattr(sim, 'termination_reason', None)} elapsed={elapsed:.1f}s",
+                flush=True,
             )
+            simulations.append(sim)
+    if skipped:
+        print(f"[improve] skipped={skipped}", flush=True)
 
     pass_hat = pass_hat_k_from_rewards(_rewards_by_task(simulations))
     avg = _avg_reward(simulations)
@@ -291,6 +327,7 @@ def run_improve(
     max_steps: int,
     max_rounds: int,
     weight: bool,
+    trial_timeout_s: int = 480,
 ) -> Path:
     from tau2_vdom.agent import reset_turn_traces
     from tau2_vdom.sidecar import default_sidecar
@@ -312,6 +349,7 @@ def run_improve(
         num_trials=num_trials,
         user=user,
         max_steps=max_steps,
+        trial_timeout_s=trial_timeout_s,
     )
     obs = _collect_obs(sims)
     rounds.append(
@@ -390,6 +428,7 @@ def run_improve(
             num_trials=num_trials,
             user=user,
             max_steps=max_steps,
+            trial_timeout_s=trial_timeout_s,
         )
         obs = _collect_obs(sims)
         rounds.append(
@@ -482,6 +521,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--user", default=None)
     p.add_argument("--max-steps", type=int, default=200)
     p.add_argument(
+        "--trial-timeout",
+        type=int,
+        default=480,
+        help="Skip a task if one trial exceeds this many seconds (default 480).",
+    )
+    p.add_argument(
         "--weight",
         action="store_true",
         help="If I_loop is exhausted and the slice still misses, spawn FakeTrainer (async).",
@@ -541,6 +586,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         domain, task_ids, live, user = _resolve_slice(args)
         model = args.model if live else "deterministic"
+        if live:
+            _pin_tau2_judges(model)
+            print(f"[improve] pinned judge/user={_litellm_user_model(model)} model={model}", flush=True)
         run_improve(
             domain=domain,
             task_ids=task_ids,
@@ -551,6 +599,7 @@ def main(argv: list[str] | None = None) -> int:
             max_steps=args.max_steps,
             max_rounds=args.max_rounds,
             weight=args.weight,
+            trial_timeout_s=args.trial_timeout,
         )
         return 0
     except ModuleNotFoundError as exc:

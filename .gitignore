@@ -10,4 +10,5 @@ eval/tau2/*.json
 !eval/tau2/latest-improve.json
 .tau2-venv/
 !eval/tau2/retail-live-metrics.json
+!eval/tau2/improve-live-0731.json
 !eval/tau2/README.md

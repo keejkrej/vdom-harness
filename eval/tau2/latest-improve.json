@@ -7,31 +7,32 @@
   "paperRepo": "https://github.com/keejkrej/agent-stochastic-dynamics",
   "tau2Repo": "https://github.com/sierra-research/tau2-bench",
   "metricNote": "pass^k is reliability across k independent trials (Yao et al. 2024; Barres et al. 2025). The accompanying paper treats pass^k as first-passage p_hit.",
-  "domain": "mock",
+  "domain": "airline",
   "taskIds": [
-    "update_task_1",
-    "impossible_task_1"
+    "39",
+    "44",
+    "41"
   ],
   "numTrials": 1,
-  "maxRounds": 4,
-  "stopReason": "saturated",
+  "maxRounds": 3,
+  "stopReason": "loop-exhausted",
   "agent": "vdom",
-  "model": "deterministic",
-  "provider": "deterministic",
-  "live": false,
+  "model": "deepseek/deepseek-v4-flash-0731",
+  "provider": "openrouter",
+  "live": true,
   "passHatKBefore": {
-    "1": 0.0
+    "1": 0.3333333333333333
   },
   "passHatKAfter": {
-    "1": 1.0
+    "1": 0.3333333333333333
   },
   "pHitSequence": [
+    0.3333333333333333,
     0.0,
-    0.5,
-    1.0
+    0.3333333333333333
   ],
-  "avgRewardBefore": 0.0,
-  "avgRewardAfter": 1.0,
+  "avgRewardBefore": 0.3333333333333333,
+  "avgRewardAfter": 0.3333333333333333,
   "interventions": [
     "I_loop",
     "I_loop"
@@ -79,23 +80,50 @@
     {
       "round": 0,
       "technique": "one-shot",
-      "pHit": 0.0,
+      "pHit": 0.3333333333333333,
       "passHatK": {
-        "1": 0.0
+        "1": 0.3333333333333333
       },
-      "avgReward": 0.0,
+      "avgReward": 0.3333333333333333,
       "taskPHit": {
-        "update_task_1": 0.0,
-        "impossible_task_1": 0.0
+        "39": 0.0,
+        "41": 1.0,
+        "44": 0.0
       },
       "obs": [
         {
-          "nSteps": 3,
+          "nSteps": 29,
           "nSuccessProxy": 0,
           "lastActions": [
             "text:Hi! How can I help you today?",
-            "create_task",
-            "text:The task was created successfully."
+            "text:Bonjour! I'd be happy to help you cancel your upcoming flights. First, could you",
+            "get_user_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "text:Merci, Amelia! I found your account. You have several reservations. Before I pro",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "text:Merci for the details, Amelia. Let me review your reservations carefully. I chec",
+            "cancel_reservation",
+            "cancel_reservation",
+            "text:Your cancellations have been processed successfully, Amelia:\n\n\u2705 **8C8K4E** (BOS ",
+            "text:I understand your intention, Amelia, but I'm afraid there is no way for me to ma",
+            "text:I completely understand your concern, Amelia, and I appreciate your patience. Un"
           ],
           "channels": [
             "env"
@@ -106,12 +134,79 @@
           "arm": "I_loop"
         },
         {
-          "nSteps": 3,
+          "nSteps": 18,
+          "nSuccessProxy": 1,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "text:I'd be happy to help you cancel your reservations. First, could you please provi",
+            "get_user_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "text:I've reviewed your reservations. Let me summarize what I found regarding **upcom",
+            "text:I understand you're willing to forgo a refund, but unfortunately I'm unable to c",
+            "transfer_to_human_agents",
+            "text:YOU ARE BEING TRANSFERRED TO A HUMAN AGENT. PLEASE HOLD ON."
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "path measure hits S; wait",
+          "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "wait"
+        },
+        {
+          "nSteps": 39,
           "nSuccessProxy": 0,
           "lastActions": [
             "text:Hi! How can I help you today?",
-            "create_task",
-            "text:The task was created successfully."
+            "text:I'd be happy to help you with that! First, I'll need your user ID to look up you",
+            "get_user_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "text:I've pulled up your reservations and flight details. Here's a summary of your up",
+            "text:Let me review the details before proceeding.\n\n**Regarding cancelling S61CZX:** U",
+            "calculate",
+            "search_onestop_flight",
+            "search_onestop_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "text:Here's what I can tell you:\n\n**Regarding S61CZX (cancellation or changing flight",
+            "update_reservation_flights",
+            "update_reservation_flights",
+            "text:Both upgrades have been completed successfully! Here's a summary:\n\n**Reservation"
           ],
           "channels": [
             "env"
@@ -124,50 +219,95 @@
       ],
       "intervention": null,
       "graphDiff": [],
-      "evalFile": "eval/tau2/mock-offline-one-shot-r1787130274-20260819T090434Z.json"
+      "evalFile": "eval/tau2/airline-live-one-shot-r1787139810-20260819T114330Z.json"
     },
     {
       "round": 1,
       "technique": "self-refine",
-      "pHit": 0.5,
+      "pHit": 0.0,
       "passHatK": {
-        "1": 0.5
+        "1": 0.0
       },
-      "avgReward": 0.5,
+      "avgReward": 0.0,
       "taskPHit": {
-        "update_task_1": 1.0,
-        "impossible_task_1": 0.0
+        "39": 0.0,
+        "44": 0.0
       },
       "obs": [
         {
-          "nSteps": 3,
-          "nSuccessProxy": 1,
-          "lastActions": [
-            "text:Hi! How can I help you today?",
-            "update_task_status",
-            "text:The task status was updated successfully."
-          ],
-          "channels": [
-            "env"
-          ],
-          "critique": "path measure hits S; wait",
-          "toolFailures": 0,
-          "repeatActions": 0,
-          "arm": "wait"
-        },
-        {
-          "nSteps": 3,
+          "nSteps": 14,
           "nSuccessProxy": 0,
           "lastActions": [
             "text:Hi! How can I help you today?",
-            "create_task",
-            "text:The task was created successfully."
+            "text:Of course, I'd be happy to help you cancel your upcoming flights. To get started",
+            "get_user_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "text:Thank you, Amelia. I've looked up your reservations. Here's what I found:\n\n**Can",
+            "cancel_reservation",
+            "cancel_reservation",
+            "text:Your two cancellations have been completed successfully:\n\n\u2705 **8C8K4E** \u2013 BOS \u2192 D"
           ],
           "channels": [
             "env"
           ],
           "critique": "episode unfinished or miss; inspect cascade / tools",
           "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "I_loop"
+        },
+        {
+          "nSteps": 37,
+          "nSuccessProxy": 0,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "text:I'd be happy to help you sort out your reservations! First, I'll need your user ",
+            "get_user_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "get_flight_status",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "search_direct_flight",
+            "text:Thanks, Sophia! I've pulled up your account and reviewed all five reservations. ",
+            "text:I need to address both requests:\n\n**1. Upgrades (NM1VX1 + H8Q05L):** I can proce",
+            "text:Got it! Before I process the upgrades, I need to confirm how the payment is spli",
+            "text:Thank you for confirming! Before I process the upgrades, I need to flag an impor",
+            "update_reservation_flights",
+            "update_reservation_flights",
+            "text:Here are the results of the upgrades:\n\n\u2705 **H8Q05L** (JFK \u2192 ATL): Successfully up",
+            "update_reservation_flights",
+            "text:Both upgrades are now complete! Here's the final summary:\n\n\u2705 **NM1VX1** (MSP \u2194 E"
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "tool failures in trajectory; inspect env channel",
+          "toolFailures": 1,
           "repeatActions": 0,
           "arm": "I_loop"
         }
@@ -189,28 +329,73 @@
           "parentKey": "critic"
         }
       ],
-      "evalFile": "eval/tau2/mock-offline-self-refine-r1787130274-20260819T090434Z.json"
+      "evalFile": "eval/tau2/airline-live-self-refine-r1787140896-20260819T120136Z.json"
     },
     {
       "round": 2,
       "technique": "validator",
-      "pHit": 1.0,
+      "pHit": 0.3333333333333333,
       "passHatK": {
-        "1": 1.0
+        "1": 0.3333333333333333
       },
-      "avgReward": 1.0,
+      "avgReward": 0.3333333333333333,
       "taskPHit": {
-        "update_task_1": 1.0,
-        "impossible_task_1": 1.0
+        "39": 0.0,
+        "41": 1.0,
+        "44": 0.0
       },
       "obs": [
         {
-          "nSteps": 3,
+          "nSteps": 17,
+          "nSuccessProxy": 0,
+          "lastActions": [
+            "text:Hi! How can I help you today?",
+            "text:Bonjour! I'd be happy to help you cancel your upcoming flights. To get started, ",
+            "get_user_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "text:Thank you, Amelia! I've located your account. I see you have several reservation",
+            "text:Thank you for the information. I've reviewed all your reservations. Here's what ",
+            "cancel_reservation",
+            "cancel_reservation",
+            "text:I've successfully cancelled the two business class reservations:\n\n- **8C8K4E** \u2013",
+            "transfer_to_human_agents",
+            "text:YOU ARE BEING TRANSFERRED TO A HUMAN AGENT. PLEASE HOLD ON."
+          ],
+          "channels": [
+            "env"
+          ],
+          "critique": "episode unfinished or miss; inspect cascade / tools",
+          "toolFailures": 0,
+          "repeatActions": 0,
+          "arm": "I_loop"
+        },
+        {
+          "nSteps": 17,
           "nSuccessProxy": 1,
           "lastActions": [
             "text:Hi! How can I help you today?",
-            "update_task_status",
-            "text:The task status was updated successfully."
+            "text:I'd be happy to help you cancel your reservation. First, I'll need your user ID.",
+            "get_user_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_flight_status",
+            "text:I've looked into your reservations, and let me share what I found.\n\nYour upcomin",
+            "text:I understand your intention, but I'm unable to cancel reservation **UDMOP1** eve",
+            "text:I understand your willingness to give up the seat without a refund, but unfortun",
+            "text:I'm sorry, but I'm unable to transfer you to a supervisor for this request. The ",
+            "text:I understand you're looking for any possible route, but unfortunately there isn'",
+            "text:You're welcome! I'm sorry I couldn't help further with the cancellation, but I a"
           ],
           "channels": [
             "env"
@@ -221,20 +406,28 @@
           "arm": "wait"
         },
         {
-          "nSteps": 3,
-          "nSuccessProxy": 1,
+          "nSteps": 11,
+          "nSuccessProxy": 0,
           "lastActions": [
             "text:Hi! How can I help you today?",
+            "text:I'd be happy to help you with your reservations. First, I'll need your user ID t",
+            "get_user_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_reservation_details",
+            "get_flight_status",
             "transfer_to_human_agents",
-            "text:I transferred you to a human agent."
+            "text:YOU ARE BEING TRANSFERRED TO A HUMAN AGENT. PLEASE HOLD ON."
           ],
           "channels": [
             "env"
           ],
-          "critique": "path measure hits S; wait",
+          "critique": "episode unfinished or miss; inspect cascade / tools",
           "toolFailures": 0,
           "repeatActions": 0,
-          "arm": "wait"
+          "arm": "I_loop"
         }
       ],
       "intervention": "I_loop",
@@ -259,9 +452,9 @@
           "parentKey": "solve"
         }
       ],
-      "evalFile": "eval/tau2/mock-offline-validator-r1787130274-20260819T090434Z.json"
+      "evalFile": "eval/tau2/airline-live-validator-r1787141499-20260819T121139Z.json"
     }
   ],
   "servingPaused": false,
-  "command": "PYTHONPATH=python python3 -m tau2_vdom.improve"
+  "command": "PYTHONPATH=python python3 -m tau2_vdom.improve --domain airline"
 }

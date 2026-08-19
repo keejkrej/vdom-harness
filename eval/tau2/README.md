@@ -31,7 +31,27 @@ Measured (deterministic, no key, official tau2 evaluator):
 | 1 | self-refine | 0.5 | 1 | 0 | I_loop | mount critic, refine |
 | 2 | validator | 1.0 | 1 | 1 | I_loop | mount validator |
 
-Then Obs saturates and the loop stops. These are measured. No live airline/retail after-scores are recorded here.
+Then Obs saturates and the loop stops. These are measured (deterministic mock).
+
+## Live closed loop on 0731 (airline 39, 44, 41)
+
+Command:
+
+    PYTHONPATH=python python3 -m tau2_vdom.improve --domain airline --task-ids 39 44 41 --num-trials 1 --max-rounds 3 --max-steps 80 --trial-timeout 480 --model deepseek/deepseek-v4-flash-0731
+
+Model: `deepseek/deepseek-v4-flash-0731` via OpenRouter. User simulator and (if used) NL-assertion judge pinned to `openrouter/deepseek/deepseek-v4-flash-0731`. Airline `reward_basis` is DB+COMMUNICATE, so EvaluationType.ALL does not call the NL judge. No gpt-4.1 calls observed.
+
+Finished: 2026-08-19 14:11 CEST. Compact: `improve-live-0731.json`.
+
+| round | technique | p_hit (pass^1) | 39 | 41 | 44 | intervention | graphDiff |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | one-shot | 0.333 | 0 | 1 | 0 | — | — |
+| 1 | self-refine | 0.0 | 0 | skip (hung > 8 min) | 0 | I_loop | mount critic, refine |
+| 2 | validator | 0.333 | 0 | 1 | 0 | I_loop | mount validator |
+
+`stopReason: loop-exhausted`. `servingPaused: false`. I_loop did **not** raise p_hit vs naive one-shot. Round-1 0.0 is a smaller denominator (task 41 skipped). Tasks 39 and 44 stayed 0.0. Not invented.
+
+Probe (one-shot, same model): airline 0/1/2 all hit 1.0 (too easy); 23 and 18 hit; 39, 44, 41 missed (41 later hit on the loop's one-shot trial).
 
 ## Live (needs a key)
 

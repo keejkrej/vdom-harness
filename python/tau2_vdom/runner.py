@@ -37,6 +37,54 @@ def _apply_openrouter_defaults() -> None:
         # LiteLLM user simulator (live retail) uses openrouter/<slug>
         os.environ.setdefault("OR_SITE_URL", "https://github.com/keejkrej/vdom-harness")
         os.environ.setdefault("OR_APP_NAME", "vdom-harness")
+        _pin_tau2_judges(os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL)
+
+
+def _pin_tau2_judges(model: str) -> str:
+    """Force tau2 NL-assertion / user-sim defaults off gpt-4.1 onto the live model."""
+    judge = _litellm_user_model(model)
+    try:
+        import tau2.config as tau2_config
+
+        tau2_config.DEFAULT_LLM_NL_ASSERTIONS = judge
+        tau2_config.DEFAULT_LLM_USER = judge
+        tau2_config.DEFAULT_LLM_ENV_INTERFACE = judge
+    except Exception:
+        pass
+    try:
+        import tau2.evaluator.evaluator_nl_assertions as nla
+
+        nla.DEFAULT_LLM_NL_ASSERTIONS = judge
+    except Exception:
+        pass
+    os.environ["VDOM_PINNED_JUDGE"] = judge
+    _install_model_audit()
+    return judge
+
+
+def _install_model_audit() -> None:
+    """Log every LiteLLM model name (never keys) so we can detect gpt-4.1 leakage."""
+    if os.environ.get("VDOM_MODEL_AUDIT") == "1":
+        return
+    os.environ["VDOM_MODEL_AUDIT"] = "1"
+    path = EVAL_DIR / "model-audit.log"
+    try:
+        import litellm
+
+        orig = litellm.completion
+
+        def wrapped(*args, **kwargs):
+            model = kwargs.get("model") or (args[0] if args else "?")
+            EVAL_DIR.mkdir(parents=True, exist_ok=True)
+            with path.open("a") as fh:
+                fh.write(f"{model}\n")
+            if "gpt-4.1" in str(model):
+                raise RuntimeError(f"blocked gpt-4.1 leakage: {model}")
+            return orig(*args, **kwargs)
+
+        litellm.completion = wrapped
+    except Exception:
+        pass
 
 
 def _litellm_user_model(model: str) -> str:
