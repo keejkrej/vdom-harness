@@ -4,7 +4,7 @@ Official scores come from measured rewards and the Yao et al. `pass^k` estimator
 
 ## The claim is a closed loop
 
-self-observe → `I_loop` or `I_weight` → run the same tasks → self-observe again, until `pass^k` saturates or a round budget. `I_loop` is failure-aware (Obs / `reward_info` → typed graph), not a fixed self-refine → validator ladder. Serving does not pause. Not a single before/after.
+self-observe → `I_loop` or `I_weight` → run the same tasks → self-observe again, until `pass^k` saturates or a round budget. The agent sees kernel C on the fast clock and may rewrite C on the slow-clock Obs; I_loop is no longer only a host technique ladder. Serving does not pause. Not a single before/after.
 
 The 5×4 retail one-shot on tasks 0–4 scored `pass^k=1.0`. That slice is **saturated** — it cannot show improvement. Do not lead with it. The figure is `python -m tau2_vdom.improve`.
 

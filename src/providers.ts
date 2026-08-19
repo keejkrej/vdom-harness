@@ -194,6 +194,102 @@ function hasWordReverseLesson(msgs: Message[]): boolean {
   );
 }
 
+/**
+ * Credential-free self-Obs. Preserves the mock 0 → 0.5 → 1.0 ladder:
+ * one-shot miss → critic+refine; still-miss → validator; hit → wait.
+ * Airline write misses mount a policy node whose text is written here, not
+ * by pasting AIRLINE_POLICY_CHECKLIST from a hidden host default.
+ */
+export function scriptedSelfObsJson(msgs: Message[]): string {
+  const text = msgs.map((m) => m.content).join("\n");
+  const rewardLine = text.match(/Official reward[^\n]*/i)?.[0] ?? "";
+  const bits = [...rewardLine.matchAll(/\b[01]\b/g)].map((m) => m[0]);
+  const anyMiss =
+    bits.includes("0") || /nSuccessProxy["']?\s*:\s*0/.test(text) || /reward \(0\/1\): unknown/.test(text);
+  const allHit = bits.length > 0 && bits.every((b) => b === "1") && !bits.includes("0");
+  if (allHit) {
+    return JSON.stringify({ action: "wait", rationale: "path measure hits S" });
+  }
+
+  const kernel = text.match(/<kernel>[\s\S]*?<\/kernel>/)?.[0] ?? text;
+  const hasCritic = /(?:^|\n)\s*critic\b/.test(kernel) || /\bcritic role=/.test(kernel);
+  const hasValidator = /(?:^|\n)\s*validator\b/.test(kernel) || /\bvalidator role=/.test(kernel);
+  const hasPolicy = /policy-checklist/.test(kernel);
+  const missedLine = text.match(/Missed tool names[^\n]*/i)?.[0] ?? "";
+  const wantsPolicy = /cancel_reservation|update_reservation_|book_reservation/.test(
+    `${missedLine}\n${text}`,
+  );
+
+  if (wantsPolicy && !hasPolicy) {
+    return JSON.stringify({
+      action: "I_loop",
+      graphPatch: {
+        technique: "policy-checklist",
+        nodes: [
+          {
+            key: "policy-checklist",
+            role: "critic",
+            kind: "policy",
+            objective: "Check official cancel and modify gates before any write tool",
+            prompt:
+              "Before cancel_reservation or update_reservation_*, check official eligibility gates. Call the write when eligible. Never invent reservation IDs. Never invent extra bars.",
+          },
+        ],
+      },
+      rationale: "missed policy write; rewrite C with a policy node",
+    });
+  }
+
+  if (!hasCritic) {
+    return JSON.stringify({
+      action: "I_loop",
+      graphPatch: {
+        technique: "self-refine",
+        nodes: [
+          {
+            key: "critic",
+            role: "critic",
+            objective: "Critique whether the next step follows policy and uses the right tool",
+          },
+          {
+            key: "refine",
+            role: "refine",
+            parentKey: "critic",
+            objective: "Produce the next action from the critique",
+          },
+        ],
+      },
+      rationale: "path missed on one-shot; mount critic+refine",
+    });
+  }
+
+  if (!hasValidator) {
+    return JSON.stringify({
+      action: "I_loop",
+      graphPatch: {
+        technique: "validator",
+        nodes: [
+          {
+            key: "validator",
+            role: "validator",
+            objective: "Forbid the last failed action; transfer when policy requires a human",
+          },
+        ],
+      },
+      rationale: "still missed after refine; mount validator",
+    });
+  }
+
+  if (!anyMiss && /path measure hits/.test(text)) {
+    return JSON.stringify({ action: "wait", rationale: "path measure hits S" });
+  }
+
+  return JSON.stringify({
+    action: "wait",
+    rationale: "C already has critic and validator; wait",
+  });
+}
+
 function selfRefineGraphJson(): string {
   return JSON.stringify(
     {
@@ -261,6 +357,10 @@ export class DeterministicProvider implements Provider {
 
     if (role === "scientist") {
       return selfRefineGraphJson();
+    }
+
+    if (role === "self-obs" || role === "self_obs" || role === "obs") {
+      return scriptedSelfObsJson(msgs);
     }
 
     if (

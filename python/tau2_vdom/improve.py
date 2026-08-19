@@ -58,8 +58,10 @@ SATURATED_NOTE = (
 CLAIM = (
     "Closed loop: self-observe → I_loop or I_weight → run again → self-observe, "
     "until pass^k saturates or the round budget. Serving does not pause. "
-    "I_loop is failure-aware (Obs / reward_info → typed graph), not a fixed "
-    "self-refine → validator ladder. Not the saturated 5×4 retail one-shot pass^k=1.0."
+    "The agent sees kernel C on the fast clock and may rewrite C on the slow-clock "
+    "Obs; I_loop is no longer only a host technique ladder. Canned airline "
+    "checklist is fallback when self-Obs JSON is invalid. "
+    "Not the saturated 5×4 retail one-shot pass^k=1.0."
 )
 SKIP_POLICY = (
     "A hung trial is retried once. If it still hangs, the simulation is recorded "
@@ -301,19 +303,82 @@ def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
     return obs_list
 
 
-def _sidecar_i_loop(sidecar: Any, obs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    payload: dict[str, Any] = {"op": "i_loop"}
+def missed_tool_names_only(obs_list: list[dict[str, Any]]) -> list[str]:
+    """Missed *tool names* for self-Obs. Never gold reservation IDs or write args."""
+    names: list[str] = []
+    for o in obs_list:
+        for a in o.get("missedActions") or []:
+            name = a.get("name") if isinstance(a, dict) else None
+            if name:
+                names.append(str(name))
+    return names
+
+
+def _self_obs_ctx(
+    simulations: list[Any],
+    obs: list[dict[str, Any]],
+    extra_traces: dict[str, list[Any]] | None = None,
+) -> dict[str, Any]:
+    tool_names: list[str] = []
+    rewards: list[int] = []
+    terminations: list[str] = []
+    traces: list[dict[str, Any]] = []
+    for sim in simulations:
+        reward = _sim_reward(sim)
+        rewards.append(1 if _success(reward) else 0)
+        term = _termination(sim)
+        if bool(getattr(sim, "hung", False)) and not term:
+            term = "timeout"
+        terminations.append(term or "user_stop")
+        for a in _actions_from_messages(getattr(sim, "messages", []) or []):
+            name = a.get("toolName") if isinstance(a, dict) else None
+            if name:
+                tool_names.append(str(name))
+    extra = extra_traces or {}
+    for rows in extra.values():
+        for t in rows:
+            if isinstance(t, dict):
+                traces.append(
+                    {
+                        "nodeKey": t.get("nodeKey") or t.get("role") or "solve",
+                        "role": t.get("role") or "solve",
+                        "output": t.get("output") or "",
+                    }
+                )
+    return {
+        "toolNames": tool_names,
+        "rewards": rewards,
+        "terminations": terminations,
+        "missedToolNames": missed_tool_names_only(obs),
+        "traces": traces,
+    }
+
+
+def _sidecar_i_loop(
+    sidecar: Any,
+    obs: list[dict[str, Any]] | None = None,
+    *,
+    ctx: dict[str, Any] | None = None,
+    model: str = "deterministic",
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"op": "self_obs", "model": model}
     if obs is not None:
         payload["obs"] = obs
+    if ctx:
+        payload.update(ctx)
     mutated = sidecar.request(payload)
     ping = sidecar.request({"op": "ping"})
+    applied = mutated.get("content") == "applied" or bool(mutated.get("applied"))
     return {
-        "applied": mutated.get("content") == "applied",
+        "applied": applied,
         "technique": mutated.get("technique"),
         "graphDiff": mutated.get("graphDiff") or [],
         "graph": mutated.get("graph"),
         "servingPaused": bool(mutated.get("servingPaused")) or bool(ping.get("servingPaused")),
         "ping": ping.get("content"),
+        "selfObsPath": mutated.get("path") or "fallback",
+        "action": mutated.get("action"),
+        "rationale": mutated.get("rationale"),
     }
 
 
@@ -513,6 +578,8 @@ def _round_record(
     skipped: list[str] | None = None,
     reward_infos: list[dict[str, Any] | None] | None = None,
     i_weight: dict[str, Any] | None = None,
+    self_obs_path: str | None = None,
+    self_obs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rec: dict[str, Any] = {
         "round": round_i,
@@ -531,6 +598,10 @@ def _round_record(
     }
     if i_weight is not None:
         rec["iWeight"] = i_weight
+    if self_obs_path:
+        rec["selfObsPath"] = self_obs_path
+    if self_obs:
+        rec["selfObs"] = self_obs
     return rec
 
 
@@ -632,8 +703,58 @@ def run_improve(
             break
 
         miss = any(o.get("nSuccessProxy", 0) != 1 for o in obs)
-        loop = _sidecar_i_loop(sidecar, obs=obs)
+        from tau2_vdom.agent import TURN_TRACES_BY_TASK
+
+        loop = _sidecar_i_loop(
+            sidecar,
+            obs=obs,
+            ctx=_self_obs_ctx(sims, obs, dict(TURN_TRACES_BY_TASK)),
+            model=model,
+        )
         serving_paused = serving_paused or bool(loop.get("servingPaused"))
+        self_obs_path = str(loop.get("selfObsPath") or "fallback")
+        self_obs_rec = {
+            "path": self_obs_path,
+            "action": loop.get("action"),
+            "rationale": loop.get("rationale"),
+        }
+
+        if loop.get("action") == "wait" and not loop.get("applied"):
+            if weight and miss:
+                current = _p_hit(pass_hat)
+                before = 0.0 if current is None else current
+                w = _run_weight_round(
+                    sidecar=sidecar,
+                    sims=sims,
+                    extra_traces=dict(TURN_TRACES_BY_TASK),
+                    before=before,
+                )
+                i_weight_report = w
+                serving_paused = serving_paused or bool(w.get("servingPaused"))
+                rounds.append(
+                    _round_record(
+                        round_i=r,
+                        technique=technique,
+                        pass_hat=pass_hat,
+                        avg=avg,
+                        obs=obs,
+                        by_task=_rewards_by_task(sims, task_ids),
+                        intervention="I_weight",
+                        graph_diff=_weight_graph_diff(w),
+                        eval_file=path,
+                        skipped=skipped,
+                        reward_infos=[
+                            serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
+                        ],
+                        i_weight=w,
+                        self_obs_path=self_obs_path,
+                        self_obs=self_obs_rec,
+                    )
+                )
+                stop_reason = "weight-mounted" if w.get("mounted") else "weight-rejected"
+                break
+            stop_reason = "wait" if miss else "saturated"
+            break
 
         if loop.get("applied"):
             intervention = "I_loop"
@@ -641,8 +762,6 @@ def run_improve(
             technique = str(loop.get("technique") or technique)
             os.environ["VDOM_TAU2_TECHNIQUE"] = technique
         elif weight:
-            from tau2_vdom.agent import TURN_TRACES_BY_TASK
-
             current = _p_hit(pass_hat)
             before = 0.0 if current is None else current
             w = _run_weight_round(
@@ -671,6 +790,8 @@ def run_improve(
                         serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
                     ],
                     i_weight=w,
+                    self_obs_path=self_obs_path,
+                    self_obs=self_obs_rec,
                 )
             )
             stop_reason = "weight-mounted" if w.get("mounted") else "weight-rejected"
@@ -708,6 +829,8 @@ def run_improve(
                 eval_file=path,
                 skipped=skipped,
                 reward_infos=[serialize_reward_info(getattr(s, "reward_info", None)) for s in sims],
+                self_obs_path=self_obs_path,
+                self_obs=self_obs_rec,
             )
         )
         if _saturated(pass_hat):
@@ -784,6 +907,7 @@ def run_improve(
         "avgRewardAfter": last["avgReward"],
         "interventions": [x["intervention"] for x in improve_rounds],
         "graphDiffs": [x["graphDiff"] for x in improve_rounds],
+        "selfObsPaths": [x.get("selfObsPath") for x in improve_rounds],
         "rounds": rounds,
         "servingPaused": serving_paused,
         "iWeight": i_weight_report,

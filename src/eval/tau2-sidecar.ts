@@ -22,7 +22,8 @@ import {
   spawnTrainJob,
 } from "../trainer.js";
 import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
-import { applyILoop, gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
+import { gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
+import { runSelfObs } from "./tau2-self-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { createInterface } from "node:readline";
 
@@ -39,6 +40,10 @@ type Incoming = {
   after?: number;
   obs?: Tau2Obs | Tau2Obs[];
   traces?: unknown[];
+  toolNames?: string[];
+  rewards?: Array<number | null>;
+  terminations?: string[];
+  missedToolNames?: string[];
   trainer?: TrainerKind;
   jobId?: string;
   baseModel?: string;
@@ -53,7 +58,18 @@ type SidecarReply = Tau2TurnResponse & {
   done?: boolean;
   gate?: ReturnType<typeof gateWeightMount>;
   job?: TrainJob;
+  path?: "self" | "fallback";
+  action?: "wait" | "I_loop";
+  rationale?: string;
+  applied?: boolean;
 };
+
+function providerFor(model?: string): ReturnType<typeof createProvider> {
+  if (!model || model === "deterministic" || model === "scripted") {
+    return new DeterministicProvider();
+  }
+  return createProvider();
+}
 
 let currentTechnique: Tau2Technique = "one-shot";
 let currentGraph: AgentGraph = tau2Graph("one-shot");
@@ -117,18 +133,34 @@ async function handle(line: string): Promise<void> {
     return;
   }
 
-  if (req.op === "i_loop") {
-    const applied = applyILoop(req.graph ?? currentGraph, req.obs);
-    currentTechnique = applied.techniqueAfter;
-    currentGraph = applied.graphAfter;
+  if (req.op === "i_loop" || req.op === "self_obs") {
+    const result = await runSelfObs({
+      graph: req.graph ?? currentGraph,
+      traces: req.traces as Array<{ nodeKey?: string; role?: string; output?: string }>,
+      toolNames: req.toolNames,
+      rewards: req.rewards,
+      terminations: req.terminations,
+      missedToolNames: req.missedToolNames,
+      obs: req.obs,
+      provider: providerFor(req.model),
+      model: req.model,
+    });
+    if (result.applied) {
+      currentTechnique = result.techniqueAfter;
+      currentGraph = result.graphAfter;
+    }
     write({
       op: "ok",
       id,
       technique: currentTechnique,
       graph: currentGraph,
-      graphDiff: applied.graphDiff,
+      graphDiff: result.graphDiff,
       servingPaused: false,
-      content: applied.applied ? "applied" : "exhausted",
+      content: result.applied ? "applied" : result.action === "wait" ? "wait" : "exhausted",
+      path: result.path,
+      action: result.action,
+      rationale: result.rationale,
+      applied: result.applied,
     });
     return;
   }

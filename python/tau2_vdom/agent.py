@@ -115,6 +115,8 @@ class VdomAgent(HalfDuplexAgent["VdomAgentState"]):
             state.messages.append(message)
 
         # Re-read env each turn so I_loop can swap technique without restarting serving.
+        # Live AgentGraph stays on the sidecar (serialized into the system prompt).
+        # Do not send a mutate tool — the τ² gym would try to execute it.
         technique = os.environ.get("VDOM_TAU2_TECHNIQUE") or self.technique
         payload = {
             "op": "turn",

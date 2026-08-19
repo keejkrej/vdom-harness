@@ -1,4 +1,4 @@
-import { type AgentGraph, type Trace } from "../ir.js";
+import { flatten, type AgentGraph, type Trace } from "../ir.js";
 import {
   type Completion,
   type Message,
@@ -7,6 +7,7 @@ import {
   createProvider,
 } from "../providers.js";
 import { tau2Graph } from "./tau2-graph.js";
+import { serializeKernelC, stripGoldIds } from "./tau2-kernel.js";
 import { type Tau2Technique } from "./tau2-types.js";
 import { AIRLINE_POLICY_CHECKLIST } from "./tau2-policy.js";
 
@@ -27,7 +28,7 @@ export type Tau2TurnOpts = {
   model?: string;
 };
 
-export type Tau2TurnResult = Completion & { traces: Trace[] };
+export type Tau2TurnResult = Completion & { traces: Trace[]; system: string };
 
 function completeTurn(
   provider: Provider,
@@ -52,8 +53,26 @@ function toolFailed(msgs: Message[]): boolean {
   return last.content.startsWith("Error") || c.includes("error") || c.includes("traceback");
 }
 
-function systemFor(policy: string, extra?: string): Message {
-  const parts = [AGENT_INSTRUCTION, "", "<policy>", policy, "</policy>"];
+function policyChecklistText(graph: AgentGraph): string {
+  const nodes = flatten(graph).map((f) => f.node);
+  const n =
+    nodes.find((x) => x.key === "policy-checklist") ??
+    nodes.find((x) => x.kind === "policy") ??
+    nodes.find((x) => x.role === "policy" || x.role === "policy-checklist");
+  const text = stripGoldIds((n?.prompt ?? n?.objective ?? "").trim());
+  return text || AIRLINE_POLICY_CHECKLIST;
+}
+
+function systemFor(policy: string, graph: AgentGraph, extra?: string): Message {
+  const parts = [
+    AGENT_INSTRUCTION,
+    "",
+    serializeKernelC(graph),
+    "",
+    "<policy>",
+    policy,
+    "</policy>",
+  ];
   if (extra) parts.push("", extra);
   return { role: "system", content: parts.join("\n") };
 }
@@ -91,6 +110,7 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
     const thinkMsgs: Message[] = [
       systemFor(
         opts.policy,
+        graph,
         "Before acting, critique the situation: what does policy require, and which tool (if any) is next?",
       ),
       ...convo,
@@ -102,37 +122,35 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
     });
     pushTrace(traces, "critic", "critic", input, critique.content);
 
-    const actMsgs: Message[] = [
-      systemFor(opts.policy, `Critique from the critic node:\n${critique.content}`),
-      ...convo,
-    ];
+    const actSys = systemFor(opts.policy, graph, `Critique from the critic node:\n${critique.content}`);
+    const actMsgs: Message[] = [actSys, ...convo];
     const acted = await completeTurn(provider, actMsgs, {
       role: "refine",
       tools: opts.tools,
       model: opts.model,
     });
     pushTrace(traces, "refine", "refine", input, formatCompletion(acted));
-    return { ...acted, traces };
+    return { ...acted, traces, system: actSys.content };
   }
 
   if (technique === "policy-checklist") {
-    const extra =
-      graph.root.children?.find((c) => c.key === "policy-checklist")?.prompt ??
-      AIRLINE_POLICY_CHECKLIST;
-    const actMsgs: Message[] = [systemFor(opts.policy, extra), ...convo];
+    const extra = policyChecklistText(graph);
+    const actSys = systemFor(opts.policy, graph, extra);
+    const actMsgs: Message[] = [actSys, ...convo];
     const acted = await completeTurn(provider, actMsgs, {
       role: "policy-checklist",
       tools: opts.tools,
       model: opts.model,
     });
     pushTrace(traces, "policy-checklist", "critic", input, formatCompletion(acted));
-    return { ...acted, traces };
+    return { ...acted, traces, system: actSys.content };
   }
 
   if (technique === "validator") {
     const thinkMsgs: Message[] = [
       systemFor(
         opts.policy,
+        graph,
         "Critique the last action. If policy forbids it, name the correct tool (including transfer).",
       ),
       ...convo,
@@ -144,22 +162,20 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
     });
     pushTrace(traces, "critic", "critic", input, critique.content);
 
-    const actMsgs: Message[] = [
-      systemFor(opts.policy, `Validator critique:\n${critique.content}`),
-      ...convo,
-    ];
+    const actSys = systemFor(opts.policy, graph, `Validator critique:\n${critique.content}`);
+    const actMsgs: Message[] = [actSys, ...convo];
     const acted = await completeTurn(provider, actMsgs, {
       role: "validator",
       tools: opts.tools,
       model: opts.model,
     });
     pushTrace(traces, "validator", "validator", input, formatCompletion(acted));
-    return { ...acted, traces };
+    return { ...acted, traces, system: actSys.content };
   }
 
   if (technique === "reflexion" && toolFailed(convo)) {
     const reflectMsgs: Message[] = [
-      systemFor(opts.policy, "A tool call just failed. Verbalize a lesson, then the actor will retry."),
+      systemFor(opts.policy, graph, "A tool call just failed. Verbalize a lesson, then the actor will retry."),
       ...convo,
       { role: "user", content: "What went wrong and what should change on the retry?" },
     ];
@@ -170,26 +186,25 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
     pushTrace(traces, "reflect", "reflect", input, lesson.content);
     pushTrace(traces, "memory", "memory", lesson.content, lesson.content);
 
-    const retryMsgs: Message[] = [
-      systemFor(opts.policy, `Episodic memory:\n${lesson.content}`),
-      ...convo,
-    ];
+    const retrySys = systemFor(opts.policy, graph, `Episodic memory:\n${lesson.content}`);
+    const retryMsgs: Message[] = [retrySys, ...convo];
     const retried = await completeTurn(provider, retryMsgs, {
       role: "actor",
       tools: opts.tools,
       model: opts.model,
     });
     pushTrace(traces, "actor", "actor", input, formatCompletion(retried));
-    return { ...retried, traces };
+    return { ...retried, traces, system: retrySys.content };
   }
 
   const root = graph.root;
-  const actMsgs: Message[] = [systemFor(opts.policy), ...convo];
+  const actSys = systemFor(opts.policy, graph);
+  const actMsgs: Message[] = [actSys, ...convo];
   const acted = await completeTurn(provider, actMsgs, {
     role: root.role,
     tools: opts.tools,
     model: opts.model,
   });
   pushTrace(traces, root.key, root.role, input, formatCompletion(acted));
-  return { ...acted, traces };
+  return { ...acted, traces, system: actSys.content };
 }

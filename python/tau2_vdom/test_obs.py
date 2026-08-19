@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tau2_vdom.improve import (
     _task_p_hit,
+    missed_tool_names_only,
     pass_hat_k_from_rewards,
 )
 from tau2_vdom.runner import _obs, serialize_reward_info
@@ -117,6 +118,23 @@ def test_obs_personal_reason_is_invented_policy() -> None:
     assert obs["techniqueRecommendation"] == "policy-checklist"
 
 
+def test_missed_tool_names_only_drops_gold_ids() -> None:
+    names = missed_tool_names_only(
+        [
+            {
+                "missedActions": [
+                    {"name": "cancel_reservation", "arguments": {"reservation_id": "MSJ4OA"}},
+                    {"name": "update_reservation_flights", "arguments": {"reservation_id": "S61CZX"}},
+                ]
+            }
+        ]
+    )
+    assert names == ["cancel_reservation", "update_reservation_flights"]
+    blob = " ".join(names)
+    assert "MSJ4OA" not in blob
+    assert "S61CZX" not in blob
+
+
 def test_hit_still_waits() -> None:
     obs = _obs(
         [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
@@ -135,6 +153,7 @@ def main() -> int:
         test_obs_hung_keeps_task,
         test_skipped_task_stays_in_task_phit,
         test_obs_personal_reason_is_invented_policy,
+        test_missed_tool_names_only_drops_gold_ids,
         test_hit_still_waits,
     ]
     failed = 0
