@@ -203,10 +203,10 @@ function hasWordReverseLesson(msgs: Message[]): boolean {
 export function scriptedSelfObsJson(msgs: Message[]): string {
   const text = msgs.map((m) => m.content).join("\n");
   const rewardLine = text.match(/Official reward[^\n]*/i)?.[0] ?? "";
-  const bits = [...rewardLine.matchAll(/\b[01]\b/g)].map((m) => m[0]);
+  const bits: string[] = [...rewardLine.matchAll(/\b[01]\b/g)].map((m) => m[0]);
   const anyMiss =
     bits.includes("0") || /nSuccessProxy["']?\s*:\s*0/.test(text) || /reward \(0\/1\): unknown/.test(text);
-  const allHit = bits.length > 0 && bits.every((b) => b === "1") && !bits.includes("0");
+  const allHit = bits.length > 0 && !bits.some((b) => b !== "1");
   if (allHit) {
     return JSON.stringify({ action: "wait", rationale: "path measure hits S" });
   }
