@@ -1,0 +1,168 @@
+{
+  "benchmark": "tau2-bench",
+  "domain": "retail",
+  "agent": "vdom",
+  "model": "deepseek/deepseek-v4-flash-0731",
+  "provider": "openrouter",
+  "technique": "one-shot",
+  "paperRepo": "https://github.com/keejkrej/agent-stochastic-dynamics",
+  "tau2Repo": "https://github.com/sierra-research/tau2-bench",
+  "metricNote": "pass^k is reliability across k independent trials (Yao et al. 2024; Barres et al. 2025). The accompanying paper treats pass^k as first-passage p_hit.",
+  "live": true,
+  "smoke": false,
+  "passHatK": {
+    "1": 1.0,
+    "2": 1.0,
+    "3": 1.0,
+    "4": 1.0
+  },
+  "avgReward": 1.0,
+  "numTasks": 5,
+  "numTrials": 4,
+  "nSimulations": 20,
+  "command": "PYTHONPATH=python python3 -m tau2_vdom --domain retail --num-tasks 5 --num-trials 4",
+  "sourceFile": "eval/tau2/latest.json",
+  "generatedAt": "2026-08-19T08:36:13Z",
+  "simulations": [
+    {
+      "taskId": "0",
+      "trial": 0,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "1",
+      "trial": 0,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "2",
+      "trial": 0,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "3",
+      "trial": 0,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "4",
+      "trial": 0,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "0",
+      "trial": 1,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "1",
+      "trial": 1,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "2",
+      "trial": 1,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "3",
+      "trial": 1,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "4",
+      "trial": 1,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "0",
+      "trial": 2,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "1",
+      "trial": 2,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "2",
+      "trial": 2,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "3",
+      "trial": 2,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "4",
+      "trial": 2,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "0",
+      "trial": 3,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "1",
+      "trial": 3,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "2",
+      "trial": 3,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "3",
+      "trial": 3,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    },
+    {
+      "taskId": "4",
+      "trial": 3,
+      "reward": 1.0,
+      "pHit": 1,
+      "termination": "user_stop"
+    }
+  ]
+}

@@ -2,7 +2,7 @@
  * Stdio JSONL sidecar. Python HalfDuplexAgent sends one turn per line.
  * Logs go to stderr so stdout stays machine-readable.
  */
-import { createProvider, type Message, type ToolSpec } from "../providers.js";
+import { createProvider, DeterministicProvider, type Message, type ToolSpec } from "../providers.js";
 import { runTau2Turn } from "./tau2-turn.js";
 import { type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { createInterface } from "node:readline";
@@ -52,7 +52,7 @@ async function handle(line: string): Promise<void> {
       messages: req.messages ?? [],
       technique: req.technique,
       model: req.model,
-      provider: createProvider(),
+      provider: req.model === "deterministic" ? new DeterministicProvider() : createProvider(),
     });
     write({
       op: "ok",
