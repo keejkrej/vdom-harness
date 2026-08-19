@@ -13,6 +13,7 @@ import {
 } from "./providers.js";
 import {
   compilePaper,
+  compileSource,
   SELF_REFINE_ABSTRACT,
   REFLEXION_ABSTRACT,
   oneShotGraph,
@@ -150,10 +151,12 @@ async function testPapers(): Promise<void> {
   assert(rxKeys.includes("memory"), "reflexion has memory");
 
   const one = compilePaper("a generic method with no known citation");
-  assertEq(one.meta?.technique, "one-shot", "unknown paper → one-shot");
+  assertEq(one.meta?.technique, "one-shot", "unknown source → one-shot");
   assertEq(flatten(one).length, 1, "one-shot is a single node");
 
   assertEq(compilePaper("self refine without hyphen").meta?.technique, "self-refine", "self refine phrase");
+  assertEq(compileSource, compilePaper, "compileSource aliases compilePaper");
+  assertEq(compileSource("a blog post about nothing in particular").meta?.technique, "one-shot", "blog-shaped text → one-shot");
 }
 
 async function testScores(): Promise<void> {
@@ -559,7 +562,7 @@ async function main(): Promise<void> {
     ["flatten / clone", testFlattenClone],
     ["reconcile mount/update/unmount/retain", testReconcile],
     ["word-reverse grade", testGrade],
-    ["paper compiler", testPapers],
+    ["source compiler", testPapers],
     ["self-refine + reflexion scores", testScores],
     ["evolution 0 → 1", testEvolution],
     ["model bind / swap / retain", testModelBinding],

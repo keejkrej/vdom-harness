@@ -110,7 +110,7 @@ async function main(): Promise<void> {
 
   tl.emit(0, {
     type: "title",
-    text: "Pi customizes an agent. DSH composes a runtime. vdom reconciles a society.",
+    text: "Pi customizes an agent. DSH composes a runtime. vdom reconciles a society that can rewrite itself.",
   });
 
   tl.emit(1400, {
