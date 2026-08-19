@@ -7,7 +7,13 @@ import {
 import { runTau2Turn } from "./tau2-turn.js";
 import { observeTau2, actionFromCompletion, markRepeats } from "./tau2-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
-import { applyILoop, gateWeightMount, recommendIntervention } from "./tau2-improve.js";
+import {
+  applyILoop,
+  gateWeightMount,
+  loopExhausted,
+  recommendIntervention,
+  recommendSliceIntervention,
+} from "./tau2-improve.js";
 
 let passed = 0;
 let failed = 0;
@@ -134,6 +140,7 @@ async function testObs(): Promise<void> {
 async function testGraphAndConfig(): Promise<void> {
   assertEq(tau2Graph("one-shot").meta?.technique, "one-shot", "oneshot graph");
   assertEq(tau2Graph("self-refine").root.children?.[0]?.role, "critic", "self-refine critic");
+  assert(tau2Graph("validator").root.children?.some((c) => c.role === "validator"), "validator node");
   assert(tau2Graph("reflexion").root.children?.some((c) => c.role === "memory"), "reflexion memory");
   assertEq(DEFAULT_OPENROUTER_MODEL, "deepseek/deepseek-v4-flash-0731", "0731 not 0424");
   const cfg = resolveChatConfig();
@@ -191,14 +198,57 @@ async function testNaiveUpdateFailsRefineRecovers(): Promise<void> {
   assertEq(after.toolCalls?.[0]?.name, "update_task_status", "self-refine turn updates status");
   assert(after.traces.some((t) => t.role === "critic"), "I_loop critic ran");
   assert(after.traces.some((t) => t.role === "refine"), "I_loop refine ran");
+
+  const deleteMsgs = [{ role: "user" as const, content: "Please delete all of my current tasks." }];
+  const toolsWithTransfer = [
+    ...tools,
+    { name: "transfer_to_human_agents", description: "Transfer" },
+  ];
+  const refineDelete = scriptedTau2MockTurn(deleteMsgs, toolsWithTransfer, { role: "refine" });
+  assertEq(refineDelete?.toolCalls?.[0]?.name, "create_task", "refine still misses transfer");
+  const validated = scriptedTau2MockTurn(deleteMsgs, toolsWithTransfer, { role: "validator" });
+  assertEq(validated?.toolCalls?.[0]?.name, "transfer_to_human_agents", "validator transfers");
+
+  const valTurn = await runTau2Turn({
+    policy: "You are not allowed to delete tasks. Transfer to a human. Completed tasks stay completed.",
+    tools: toolsWithTransfer,
+    messages: deleteMsgs,
+    provider,
+    technique: "validator",
+  });
+  assertEq(valTurn.toolCalls?.[0]?.name, "transfer_to_human_agents", "validator turn transfers");
+  assert(valTurn.traces.some((t) => t.role === "validator"), "validator trace present");
+
+  const policyLeak = [
+    { role: "system" as const, content: "Policy: completed tasks stay completed." },
+    { role: "user" as const, content: "Please delete all of my current tasks." },
+  ];
+  const leak = scriptedTau2MockTurn(policyLeak, toolsWithTransfer, { role: "validator" });
+  assertEq(
+    leak?.toolCalls?.[0]?.name,
+    "transfer_to_human_agents",
+    "validator ignores policy 'completed' and reads user text only",
+  );
 }
 
 async function testILoopAndWeightGate(): Promise<void> {
   const applied = applyILoop();
   assertEq(applied.arm, "I_loop", "applyILoop is I_loop");
+  assertEq(applied.applied, true, "first I_loop applies");
   assertEq(applied.techniqueAfter, "self-refine", "technique becomes self-refine");
   const keys = applied.graphDiff.map((o) => `${o.op}:${o.key}`).join(",");
   assertEq(keys, "retain:solve,mount:critic,mount:refine", "reconcile mounts critic+refine");
+
+  const second = applyILoop(applied.graphAfter);
+  assertEq(second.applied, true, "second I_loop applies");
+  assertEq(second.techniqueAfter, "validator", "second I_loop mounts validator");
+  assert(
+    second.graphDiff.some((o) => o.op === "mount" && o.key === "validator"),
+    "graph diff mounts validator",
+  );
+  assertEq(loopExhausted(second.graphAfter), true, "two I_loop rounds exhaust topology");
+  const third = applyILoop(second.graphAfter);
+  assertEq(third.applied, false, "third I_loop is exhausted");
 
   const miss = recommendIntervention({
     nSteps: 3,
@@ -228,6 +278,22 @@ async function testILoopAndWeightGate(): Promise<void> {
   assertEq(rejectEq.action, "reject", "I_weight rejects when after == before");
   const rejectDown = gateWeightMount(1, 0);
   assertEq(rejectDown.action, "reject", "I_weight rejects when after < before");
+
+  const sliceMiss = recommendSliceIntervention([
+    { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
+    { nSteps: 1, nSuccessProxy: 0, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
+  ]);
+  assertEq(sliceMiss, "I_loop", "mixed slice still emits I_loop");
+  const sliceDone = recommendSliceIntervention([
+    { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
+    { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
+  ]);
+  assertEq(sliceDone, "wait", "all-hit slice waits");
+  const sliceWeight = recommendSliceIntervention(
+    [{ nSteps: 1, nSuccessProxy: 0, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 }],
+    { loopExhausted: true },
+  );
+  assertEq(sliceWeight, "I_weight", "exhausted loop + miss → I_weight");
 }
 
 async function testWordReverseUntouched(): Promise<void> {

@@ -29,6 +29,29 @@ export function applySelfRefineMutation(g: AgentGraph): AgentGraph {
   return next;
 }
 
+/** Second I_loop step: mount a validator that forbids the last failed action. */
+export function applyValidatorMutation(g: AgentGraph): AgentGraph {
+  const next = cloneGraph(g);
+  next.version = g.version + 1;
+  next.id = `${g.id}-validator`;
+  next.meta = { ...(g.meta ?? {}), technique: "validator", mutated: true };
+  const kids = next.root.children ?? [];
+  if (!kids.some((c) => c.key === "validator")) {
+    next.root = {
+      ...next.root,
+      children: [
+        ...kids,
+        node({
+          key: "validator",
+          role: "validator",
+          objective: "Forbid the last failed action; transfer when policy requires a human",
+        }),
+      ],
+    };
+  }
+  return next;
+}
+
 function tryParseGraph(raw: string): AgentGraph | undefined {
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   const text = fence?.[1] ?? raw;

@@ -323,6 +323,14 @@ export type ScriptedTurnOpts = {
   role?: string;
 };
 
+function userTranscript(msgs: Message[]): string {
+  return msgs
+    .filter((m) => m.role === "user")
+    .map((m) => m.content)
+    .join("\n")
+    .toLowerCase();
+}
+
 function isUpdateIntent(text: string): boolean {
   return (
     text.includes("completed") ||
@@ -333,11 +341,17 @@ function isUpdateIntent(text: string): boolean {
   );
 }
 
+function isTransferIntent(text: string): boolean {
+  return text.includes("delete") || text.includes("impossible") || text.includes("cannot");
+}
+
 /**
  * Deterministic mock-domain policy for create/update/transfer tasks.
  *
- * Naive one-shot (role solve/actor) fails official `update_task_1`: it stays
- * in the create_task attractor. Self-Refine refine role calls the right tool.
+ * Staged mock policy for the closed improve loop:
+ * - one-shot solve fails `update_task_1` (create_task attractor) and `impossible_task_1`
+ * - Self-Refine refine recovers update, still misses transfer
+ * - validator role recovers transfer
  * create_task_1 is unchanged (one-shot already hits).
  */
 export function scriptedTau2MockTurn(
@@ -348,6 +362,7 @@ export function scriptedTau2MockTurn(
   if (tools.length === 0) return undefined;
   const names = new Set(tools.map((t) => t.name));
   const text = transcript(msgs).toLowerCase();
+  const userText = userTranscript(msgs);
   const lastTool = lastToolMessage(msgs);
   const role = (opts?.role ?? "").toLowerCase();
   const naive = NAIVE_ROLES.has(role);
@@ -362,6 +377,9 @@ export function scriptedTau2MockTurn(
       lastTool.name === "transfer_to_human_agents"
         ? lastTool.name
         : lastAssistantToolName(msgs);
+    if (lastToolName === "transfer_to_human_agents") {
+      return { content: "I transferred you to a human agent." };
+    }
     if (lastToolName === "update_task_status") {
       return { content: "The task status was updated successfully." };
     }
@@ -390,7 +408,7 @@ export function scriptedTau2MockTurn(
     };
   }
 
-  if (names.has("update_task_status") && isUpdateIntent(text) && naive) {
+  if (names.has("update_task_status") && isUpdateIntent(userText) && naive) {
     // Metastable create_task loop — the I_loop diagnostic on mock update_task_1.
     if (names.has("create_task")) {
       return {
@@ -407,7 +425,7 @@ export function scriptedTau2MockTurn(
     return { content: "I created a new task instead of updating the existing one." };
   }
 
-  if (names.has("update_task_status") && isUpdateIntent(text)) {
+  if (names.has("update_task_status") && isUpdateIntent(userText)) {
     const taskId = text.includes("task_2") ? "task_2" : "task_1";
     return {
       content: "",
@@ -421,23 +439,36 @@ export function scriptedTau2MockTurn(
     };
   }
 
-  if (
-    names.has("transfer_to_human_agents") &&
-    (text.includes("delete") || text.includes("impossible") || text.includes("cannot"))
-  ) {
-    return {
-      content: "",
-      toolCalls: [
-        {
-          id: "call_transfer_1",
-          name: "transfer_to_human_agents",
-          arguments: {
-            summary:
-              "User needs to delete all their current tasks. This is not possible to do with the tools available.",
+  if (names.has("transfer_to_human_agents") && isTransferIntent(userText)) {
+    // Only the validator node is allowed to transfer. Refine / one-shot stay in the attractor.
+    if (role === "validator") {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "call_transfer_1",
+            name: "transfer_to_human_agents",
+            arguments: {
+              summary:
+                "User needs to delete all their current tasks. This is not possible to do with the tools available.",
+            },
           },
-        },
-      ],
-    };
+        ],
+      };
+    }
+    if (names.has("create_task")) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "call_create_task_naive",
+            name: "create_task",
+            arguments: { user_id: "user_1", title: "Important Meeting" },
+          },
+        ],
+      };
+    }
+    return { content: "I cannot delete tasks with the tools I have." };
   }
 
   return undefined;

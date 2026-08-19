@@ -114,6 +114,34 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
     return { ...acted, traces };
   }
 
+  if (technique === "validator") {
+    const thinkMsgs: Message[] = [
+      systemFor(
+        opts.policy,
+        "Critique the last action. If policy forbids it, name the correct tool (including transfer).",
+      ),
+      ...convo,
+      { role: "user", content: "Write a short critique. Do not call tools." },
+    ];
+    const critique = await completeTurn(provider, thinkMsgs, {
+      role: "critic",
+      model: opts.model,
+    });
+    pushTrace(traces, "critic", "critic", input, critique.content);
+
+    const actMsgs: Message[] = [
+      systemFor(opts.policy, `Validator critique:\n${critique.content}`),
+      ...convo,
+    ];
+    const acted = await completeTurn(provider, actMsgs, {
+      role: "validator",
+      tools: opts.tools,
+      model: opts.model,
+    });
+    pushTrace(traces, "validator", "validator", input, formatCompletion(acted));
+    return { ...acted, traces };
+  }
+
   if (technique === "reflexion" && toolFailed(convo)) {
     const reflectMsgs: Message[] = [
       systemFor(opts.policy, "A tool call just failed. Verbalize a lesson, then the actor will retry."),

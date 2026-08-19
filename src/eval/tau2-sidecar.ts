@@ -114,6 +114,7 @@ async function handle(line: string): Promise<void> {
       graph: currentGraph,
       graphDiff: applied.graphDiff,
       servingPaused: false,
+      content: applied.applied ? "applied" : "exhausted",
     });
     return;
   }

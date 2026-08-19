@@ -4,7 +4,7 @@ import { type Completion, type Message, type ToolSpec } from "../providers.js";
 export const TAU2_PAPER_REPO = "https://github.com/keejkrej/agent-stochastic-dynamics";
 export const TAU2_BENCH_REPO = "https://github.com/sierra-research/tau2-bench";
 
-export type Tau2Technique = "one-shot" | "self-refine" | "reflexion";
+export type Tau2Technique = "one-shot" | "self-refine" | "reflexion" | "validator";
 
 export type Tau2TurnRequest = {
   op: "turn";

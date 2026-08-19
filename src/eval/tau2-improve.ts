@@ -1,5 +1,5 @@
-import { type AgentGraph } from "../ir.js";
-import { applySelfRefineMutation } from "../scientist.js";
+import { flatten, type AgentGraph } from "../ir.js";
+import { applySelfRefineMutation, applyValidatorMutation } from "../scientist.js";
 import { reconcile, type ReconcileOp } from "../reconciler.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { type Tau2Obs, type Tau2Technique } from "./tau2-types.js";
@@ -14,8 +14,9 @@ export type GraphDiffOp = {
 
 export type ILoopResult = {
   arm: "I_loop";
+  applied: boolean;
   techniqueBefore: Tau2Technique;
-  techniqueAfter: "self-refine";
+  techniqueAfter: Tau2Technique;
   graphBefore: AgentGraph;
   graphAfter: AgentGraph;
   graphDiff: GraphDiffOp[];
@@ -29,11 +30,30 @@ export type WeightGateDecision = {
   reason: string;
 };
 
-export function recommendIntervention(obs: Tau2Obs): InterventionArm {
+export function graphHas(g: AgentGraph, key: string): boolean {
+  return flatten(g).some((f) => f.node.key === key);
+}
+
+export function loopExhausted(g: AgentGraph): boolean {
+  return graphHas(g, "critic") && graphHas(g, "validator");
+}
+
+export function recommendIntervention(
+  obs: Tau2Obs,
+  opts?: { loopExhausted?: boolean },
+): InterventionArm {
   if (obs.nSuccessProxy === 1) return "wait";
-  if (obs.repeatActions > 0 || obs.toolFailures > 0 || obs.nSuccessProxy === 0) {
-    return "I_loop";
-  }
+  if (opts?.loopExhausted) return "I_weight";
+  return "I_loop";
+}
+
+/** Slice-level arm: wait only if every episode hit; else I_loop until topology is exhausted. */
+export function recommendSliceIntervention(
+  obsList: Tau2Obs[],
+  opts?: { loopExhausted?: boolean },
+): InterventionArm {
+  if (obsList.length > 0 && obsList.every((o) => o.nSuccessProxy === 1)) return "wait";
+  if (opts?.loopExhausted) return "I_weight";
   return "I_loop";
 }
 
@@ -79,23 +99,48 @@ export function diffOps(ops: ReconcileOp[]): GraphDiffOp[] {
   }));
 }
 
+function techniqueOf(g: AgentGraph): Tau2Technique {
+  const t = g.meta?.technique;
+  if (t === "self-refine" || t === "validator" || t === "reflexion" || t === "one-shot") {
+    return t;
+  }
+  return "one-shot";
+}
+
 /**
- * I_loop: mutate the naive one-shot AgentGraph (Self-Refine critic + refine).
- * Reconcile is deterministic — serving does not restart.
+ * Next I_loop step on the live graph. Reconcile is deterministic; serving does not restart.
+ * one-shot → Self-Refine (critic+refine); self-refine → validator node; then exhausted.
  */
 export function applyILoop(start?: AgentGraph): ILoopResult {
   const graphBefore = start ?? tau2Graph("one-shot");
-  const graphAfter = applySelfRefineMutation(graphBefore);
+  const techniqueBefore = techniqueOf(graphBefore);
+  let graphAfter: AgentGraph;
+  let techniqueAfter: Tau2Technique;
+  let applied = true;
+
+  if (!graphHas(graphBefore, "critic")) {
+    graphAfter = applySelfRefineMutation(graphBefore);
+    techniqueAfter = "self-refine";
+  } else if (!graphHas(graphBefore, "validator")) {
+    graphAfter = applyValidatorMutation(graphBefore);
+    techniqueAfter = "validator";
+  } else {
+    graphAfter = graphBefore;
+    techniqueAfter = techniqueBefore;
+    applied = false;
+  }
+
   graphAfter.meta = {
     ...(graphAfter.meta ?? {}),
-    technique: "self-refine",
-    intervention: "I_loop",
+    technique: techniqueAfter,
+    intervention: applied ? "I_loop" : "exhausted",
   };
   const rec = reconcile(graphBefore, graphAfter);
   return {
     arm: "I_loop",
-    techniqueBefore: (graphBefore.meta?.technique as Tau2Technique) ?? "one-shot",
-    techniqueAfter: "self-refine",
+    applied,
+    techniqueBefore,
+    techniqueAfter,
     graphBefore,
     graphAfter,
     graphDiff: diffOps(rec.ops),

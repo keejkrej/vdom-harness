@@ -2,15 +2,18 @@
 
 Official scores come from measured rewards and the Yao et al. `pass^k` estimator `C(c,k)/C(n,k)`. This harness does not invent `pass^k`.
 
-## The claim is runtime self-improvement
+## The claim is a closed loop
 
-A vdom agent observes its traces (Obs), then either mutates the AgentGraph (`I_loop`) or dispatches an async trainer and mounts weights when a gate passes (`I_weight`). Serving does not pause.
+self-observe → `I_loop` or `I_weight` → run the same tasks → self-observe again, until `pass^k` saturates or a round budget. Serving does not pause. Not a single before/after.
 
 The 5×4 retail one-shot on tasks 0–4 scored `pass^k=1.0`. That slice is **saturated** — it cannot show improvement. Do not lead with it. The figure is `python -m tau2_vdom.improve`.
 
-## Mock-domain before / after (no API key)
+## Mock-domain closed loop (no API key)
 
-Naive one-shot fails official `update_task_1` (create_task attractor). `I_loop` mounts critic+refine (Self-Refine); the same task is re-run.
+Two official mock tasks so two `I_loop` rounds actually change `p_hit`:
+
+1. `update_task_1` — naive create_task attractor; Self-Refine recovers.
+2. `impossible_task_1` — still misses after Self-Refine; validator node transfers.
 
 ```
 bash scripts/setup-tau2.sh
@@ -18,20 +21,21 @@ PYTHONPATH=python python3 -m tau2_vdom.improve
 # or: npm run eval:tau2:improve
 ```
 
-Writes `eval/tau2/latest-improve.json`: `passHatKBefore`, `passHatKAfter`, `intervention`, `graphDiff`, `obs`. Optional `--weight` spawns `FakeTrainer` without pausing serving and mounts only if after-eval beats before.
+Writes `eval/tau2/latest-improve.json`: `rounds[]` with `pHit`, `passHatK`, `taskPHit`, `obs`, `intervention`, `graphDiff` per round. `--max-rounds` is the improve budget (default 4). `--weight` only if topology is exhausted and the slice still misses.
 
-Measured (deterministic, no key, official `update_task_1`, tau2 evaluator):
+Measured (deterministic, no key, official tau2 evaluator):
 
-- `passHatKBefore` / `avgRewardBefore` = 0.0 (naive one-shot, create_task attractor)
-- `passHatKAfter` / `avgRewardAfter` = 1.0 (`I_loop` Self-Refine)
-- `graphDiff`: retain solve, mount critic, mount refine
-- `I_weight` FakeTrainer spawned; servingPaused=false; gate **rejected** (after did not beat current 1.0)
+| round | technique | p_hit (pass^1) | update_task_1 | impossible_task_1 | intervention | graphDiff |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | one-shot | 0.0 | 0 | 0 | — | — |
+| 1 | self-refine | 0.5 | 1 | 0 | I_loop | mount critic, refine |
+| 2 | validator | 1.0 | 1 | 1 | I_loop | mount validator |
 
-These are measured. No live airline/retail after-scores are recorded here.
+Then Obs saturates and the loop stops. These are measured. No live airline/retail after-scores are recorded here.
 
 ## Live (needs a key)
 
-Default live model: `deepseek/deepseek-v4-flash-0731` via OpenRouter. Probe airline, or retail tasks **beyond 0–4**. If the naive graph already scores 1.0, the report records `intervention: none` and does not invent an after-score.
+Default live model: `deepseek/deepseek-v4-flash-0731` via OpenRouter. Probe airline, or retail tasks **beyond 0–4**. If the naive graph already scores 1.0, the report records `stopReason: saturated` after the first Obs and does not invent an after-score.
 
 ```
 export OPENROUTER_API_KEY=...

@@ -60,7 +60,7 @@ Without a key, the deterministic provider stays active.
 
 ## Evaluation
 
-The result this repo claims is **runtime self-improvement**, not a static one-shot τ² score. A vdom agent observes its traces (Obs), then either mutates the AgentGraph (`I_loop`) or dispatches an async trainer and mounts weights when a gate passes (`I_weight`). Serving does not pause. The 5×4 retail one-shot slice on tasks 0–4 scored `pass^k=1.0` — that slice is saturated and cannot show improvement; do not lead with it.
+The result this repo claims is a **closed loop**: self-observe → `I_loop` or `I_weight` → run again → self-observe, until `pass^k` saturates or a round budget. Not a static one-shot τ² score and not a single before/after. Serving does not pause. The 5×4 retail one-shot slice on tasks 0–4 scored `pass^k=1.0` — that slice is saturated and cannot show improvement; do not lead with it.
 
 Toys in `src/benchmarks.ts` (word-reverse, and friends) are **unit fixtures**. They prove the reconciler and DeterministicProvider, not the agent. The paper that accompanies this runtime is [agent-stochastic-dynamics](https://github.com/keejkrej/agent-stochastic-dynamics). This repo is the submitted runtime.
 
@@ -74,13 +74,14 @@ npm test
 bash scripts/setup-tau2.sh
 npm run eval:tau2:smoke
 
-# Runtime self-improvement figure (no key): naive one-shot fails official
-# mock update_task_1; I_loop (Self-Refine) re-runs the same task.
+# Closed loop (no key): observe → I_loop → observe → I_loop → observe
+# until pass^k saturates. Mock uses update_task_1 + impossible_task_1
+# so two rounds actually change p_hit (0 → 0.5 → 1.0).
 PYTHONPATH=python python3 -m tau2_vdom.improve
 npm run eval:tau2:improve
 ```
 
-`eval/tau2/latest-improve.json` records measured `passHatKBefore` / `passHatKAfter`, the intervention (`I_loop` / `I_weight` / none), Obs, and the reconciler graph diff (mount/update/unmount). Scores are not invented. If a live slice is already 1.0 under the naive graph, the report says so and does not claim improvement.
+`eval/tau2/latest-improve.json` records the **sequence** of rounds: `pHit` / `passHatK` / `taskPHit`, Obs, intervention, and graph diff per round. Scores are not invented. If a live slice is already 1.0 under the naive graph, the report stops after the first Obs (`stopReason: saturated`).
 
 Live self-improvement (needs a key). Default live domain is **airline**, or retail **held-out** tasks 5–9 — not retail 0–4:
 
