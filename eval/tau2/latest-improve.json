@@ -1,0 +1,84 @@
+{
+  "benchmark": "tau2-bench",
+  "kind": "runtime-self-improvement",
+  "claim": "Runtime self-improvement: Obs from traces, then I_loop (AgentGraph mutation) or gated I_weight (async trainer; serving does not pause). Not the saturated 5\u00d74 retail one-shot pass^k=1.0.",
+  "note": "Runtime self-improvement: Obs from traces, then I_loop (AgentGraph mutation) or gated I_weight (async trainer; serving does not pause). Not the saturated 5\u00d74 retail one-shot pass^k=1.0.",
+  "paperRepo": "https://github.com/keejkrej/agent-stochastic-dynamics",
+  "tau2Repo": "https://github.com/sierra-research/tau2-bench",
+  "metricNote": "pass^k is reliability across k independent trials (Yao et al. 2024; Barres et al. 2025). The accompanying paper treats pass^k as first-passage p_hit.",
+  "domain": "mock",
+  "taskIds": [
+    "update_task_1"
+  ],
+  "numTrials": 1,
+  "agent": "vdom",
+  "model": "deterministic",
+  "provider": "deterministic",
+  "live": false,
+  "passHatKBefore": {
+    "1": 0.0
+  },
+  "passHatKAfter": {
+    "1": 1.0
+  },
+  "avgRewardBefore": 0.0,
+  "avgRewardAfter": 1.0,
+  "intervention": "I_loop",
+  "interventionDetail": "self-refine critic+refine (scientist / applySelfRefineMutation)",
+  "graphDiff": [
+    {
+      "op": "retain",
+      "key": "solve"
+    },
+    {
+      "op": "mount",
+      "key": "critic",
+      "parentKey": "solve"
+    },
+    {
+      "op": "mount",
+      "key": "refine",
+      "parentKey": "critic"
+    },
+    {
+      "op": "reject",
+      "key": "adapter"
+    }
+  ],
+  "obs": [
+    {
+      "nSteps": 3,
+      "nSuccessProxy": 0,
+      "lastActions": [
+        "text:Hi! How can I help you today?",
+        "create_task",
+        "text:The task was created successfully."
+      ],
+      "channels": [
+        "env"
+      ],
+      "critique": "episode unfinished or miss; inspect cascade / tools",
+      "toolFailures": 0,
+      "repeatActions": 0,
+      "arm": "I_loop"
+    }
+  ],
+  "weight": {
+    "spawned": true,
+    "done": true,
+    "servingPaused": false,
+    "ping": "pong",
+    "gate": {
+      "arm": "I_weight",
+      "action": "reject",
+      "before": 1,
+      "after": 1,
+      "reason": "after-eval did not beat before; serving keeps old f_theta"
+    },
+    "mounted": false
+  },
+  "servingPaused": false,
+  "beforeFile": "eval/tau2/mock-offline-one-shot-20260819T085911Z.json",
+  "afterFile": "eval/tau2/mock-offline-self-refine-20260819T085911Z.json",
+  "command": "PYTHONPATH=python python3 -m tau2_vdom.improve"
+}

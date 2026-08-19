@@ -285,7 +285,7 @@ export class DeterministicProvider implements Provider {
    */
   async completeTurn(msgs: Message[], opts?: CompleteOpts): Promise<Completion> {
     const tools = opts?.tools ?? [];
-    const scripted = scriptedTau2MockTurn(msgs, tools);
+    const scripted = scriptedTau2MockTurn(msgs, tools, { role: opts?.role });
     if (scripted) return scripted;
     const content = await this.complete(msgs, opts);
     return { content };
@@ -307,30 +307,66 @@ function lastToolMessage(msgs: Message[]): Message | undefined {
   return [...msgs].reverse().find((m) => m.role === "tool");
 }
 
+function lastAssistantToolName(msgs: Message[]): string | undefined {
+  const last = [...msgs].reverse().find((m) => (m.tool_calls?.length ?? 0) > 0);
+  return last?.tool_calls?.[0]?.name;
+}
+
 function toolFailed(msg: Message): boolean {
   const c = msg.content.toLowerCase();
   return msg.content.startsWith("Error") || c.includes("error") || c.includes("traceback");
 }
 
-/** Deterministic mock-domain policy for create/update/transfer tasks. */
+const NAIVE_ROLES = new Set(["solve", "actor", "one-shot", "oneshot", "generator"]);
+
+export type ScriptedTurnOpts = {
+  role?: string;
+};
+
+function isUpdateIntent(text: string): boolean {
+  return (
+    text.includes("completed") ||
+    text.includes("mark task") ||
+    text.includes("mark an existing") ||
+    text.includes("update_task_status") ||
+    (text.includes("update") && text.includes("status"))
+  );
+}
+
+/**
+ * Deterministic mock-domain policy for create/update/transfer tasks.
+ *
+ * Naive one-shot (role solve/actor) fails official `update_task_1`: it stays
+ * in the create_task attractor. Self-Refine refine role calls the right tool.
+ * create_task_1 is unchanged (one-shot already hits).
+ */
 export function scriptedTau2MockTurn(
   msgs: Message[],
   tools: ToolSpec[],
+  opts?: ScriptedTurnOpts,
 ): Completion | undefined {
   if (tools.length === 0) return undefined;
   const names = new Set(tools.map((t) => t.name));
   const text = transcript(msgs).toLowerCase();
   const lastTool = lastToolMessage(msgs);
+  const role = (opts?.role ?? "").toLowerCase();
+  const naive = NAIVE_ROLES.has(role);
 
   if (lastTool) {
     if (toolFailed(lastTool)) {
       return { content: "The previous tool call failed. I will try a different approach." };
     }
-    if (lastTool.name === "create_task" || lastTool.content.toLowerCase().includes("task")) {
-      return { content: "The task was created successfully." };
-    }
-    if (lastTool.name === "update_task_status" || lastTool.content.toLowerCase().includes("status")) {
+    const lastToolName =
+      lastTool.name === "create_task" ||
+      lastTool.name === "update_task_status" ||
+      lastTool.name === "transfer_to_human_agents"
+        ? lastTool.name
+        : lastAssistantToolName(msgs);
+    if (lastToolName === "update_task_status") {
       return { content: "The task status was updated successfully." };
+    }
+    if (lastToolName === "create_task" || lastTool.content.toLowerCase().includes("task")) {
+      return { content: "The task was created successfully." };
     }
     return { content: "Done. The requested change is complete." };
   }
@@ -354,10 +390,24 @@ export function scriptedTau2MockTurn(
     };
   }
 
-  if (
-    names.has("update_task_status") &&
-    (text.includes("completed") || text.includes("mark") || text.includes("update"))
-  ) {
+  if (names.has("update_task_status") && isUpdateIntent(text) && naive) {
+    // Metastable create_task loop — the I_loop diagnostic on mock update_task_1.
+    if (names.has("create_task")) {
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "call_create_task_naive",
+            name: "create_task",
+            arguments: { user_id: "user_1", title: "Important Meeting" },
+          },
+        ],
+      };
+    }
+    return { content: "I created a new task instead of updating the existing one." };
+  }
+
+  if (names.has("update_task_status") && isUpdateIntent(text)) {
     const taskId = text.includes("task_2") ? "task_2" : "task_1";
     return {
       content: "",

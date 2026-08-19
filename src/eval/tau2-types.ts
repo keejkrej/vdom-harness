@@ -44,6 +44,8 @@ export type Tau2Obs = {
   critique: string;
   toolFailures: number;
   repeatActions: number;
+  /** Paper arm Obs should emit: I_loop | I_weight | wait */
+  arm?: "I_loop" | "I_weight" | "wait";
 };
 
 export type Tau2SimulationLog = {

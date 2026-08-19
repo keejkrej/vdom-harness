@@ -7,6 +7,7 @@ dist/
 eval/tau2/*.json
 !eval/tau2/.gitkeep
 !eval/tau2/latest-smoke.json
+!eval/tau2/latest-improve.json
 .tau2-venv/
 !eval/tau2/retail-live-metrics.json
 !eval/tau2/README.md

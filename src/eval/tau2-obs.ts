@@ -1,6 +1,7 @@
 import { type Trace } from "../ir.js";
 import { type Completion } from "../providers.js";
 import { type Tau2ActionLog, type Tau2Obs } from "./tau2-types.js";
+import { recommendIntervention } from "./tau2-improve.js";
 
 export function actionFromCompletion(turn: Completion): Tau2ActionLog {
   const tc = turn.toolCalls?.[0];
@@ -47,7 +48,7 @@ export function observeTau2(opts: {
         : repeatActions > 0
           ? "repeat actions; loop mutation or wait"
           : "episode unfinished or miss; inspect cascade / tools";
-  return {
+  const obs: Tau2Obs = {
     nSteps: tracesOrActions(opts.traces, actions),
     nSuccessProxy: pHit,
     lastActions,
@@ -56,6 +57,8 @@ export function observeTau2(opts: {
     toolFailures,
     repeatActions,
   };
+  obs.arm = recommendIntervention(obs);
+  return obs;
 }
 
 function tracesOrActions(traces: Trace[], actions: Tau2ActionLog[]): number {

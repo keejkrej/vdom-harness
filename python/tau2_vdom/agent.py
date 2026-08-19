@@ -114,12 +114,14 @@ class VdomAgent(HalfDuplexAgent["VdomAgentState"]):
         elif message is not None:
             state.messages.append(message)
 
+        # Re-read env each turn so I_loop can swap technique without restarting serving.
+        technique = os.environ.get("VDOM_TAU2_TECHNIQUE") or self.technique
         payload = {
             "op": "turn",
             "policy": self.domain_policy,
             "tools": self._tool_schemas,
             "messages": [_msg_to_json(m) for m in state.messages],
-            "technique": self.technique,
+            "technique": technique,
             "model": self.llm,
         }
         data = self._sidecar.request(payload)
