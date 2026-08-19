@@ -21,7 +21,7 @@ PYTHONPATH=python python3 -m tau2_vdom.improve
 # or: npm run eval:tau2:improve
 ```
 
-Writes `eval/tau2/latest-improve.json`: `rounds[]` with `pHit`, `passHatK`, `taskPHit`, `obs`, `intervention`, `graphDiff` per round. `--max-rounds` is the improve budget (default 4). `--weight` only if topology is exhausted and the slice still misses.
+Writes `eval/tau2/latest-improve.json`: `rounds[]` with `pHit`, `passHatK`, `taskPHit`, `obs`, `intervention`, `graphDiff` per round. `--max-rounds` is the improve budget (default 4). `--weight` runs the slow-clock `TrainJob` after I_loop (incomplete traces or the deterministic fixture). I_weight is the slow clock for incomplete episodes; 0731 is API-frozen so the mount is a surrogate or a reject, never a fake LoRA. Serving does not pause.
 
 Measured (deterministic, no key, official tau2 evaluator):
 
@@ -32,6 +32,8 @@ Measured (deterministic, no key, official tau2 evaluator):
 | 2 | validator | 1.0 | 1 | 1 | I_loop | mount validator |
 
 Then Obs saturates and the loop stops. These are measured (deterministic mock).
+
+`--weight` then spawns a slow-clock `TrainJob` from incomplete-episode traces (or the deterministic fixture if the official slice already hit). Serving stays up. The surrogate cannot raise `p_hit`; the gate rejects. Official mock `p_hit` is unchanged. Not a 0731 LoRA.
 
 ## Live closed loop on 0731 (airline 39, 44, 41)
 

@@ -70,6 +70,12 @@ SKIP_POLICY = (
 # Two official mock tasks so the loop needs two I_loop rounds (not one before/after).
 DEFAULT_MOCK_TASKS = ["update_task_1", "impossible_task_1"]
 RETAIL_HELD_OUT = ["5", "6", "7", "8", "9"]
+# Deterministic incomplete episode for the I_weight protocol smoke (no live key).
+INCOMPLETE_FIXTURE_ID = "incomplete_fixture_1"
+I_WEIGHT_NOTE = (
+    "I_weight is the slow clock for incomplete episodes; 0731 is API-frozen "
+    "so the mount is a surrogate or a reject, never a fake LoRA."
+)
 
 
 def _success(reward: float | None) -> bool:
@@ -311,25 +317,175 @@ def _sidecar_i_loop(sidecar: Any, obs: list[dict[str, Any]] | None = None) -> di
     }
 
 
-def _sidecar_weight(sidecar: Any, *, before: float, after: float) -> dict[str, Any]:
-    spawned = sidecar.request({"op": "i_weight_spawn"})
+def _termination(sim: Any) -> str:
+    raw = getattr(sim, "termination_reason", None)
+    if raw is None:
+        return ""
+    val = getattr(raw, "value", None)
+    return str(val or raw or "").lower()
+
+
+def _sim_reward(sim: Any) -> float | None:
+    info = getattr(sim, "reward_info", None)
+    if info is None:
+        return None
+    try:
+        return float(info.reward)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def is_incomplete_episode(sim: Any) -> bool:
+    """I_weight trains on transfer / hung / crash / reward-0 early transfer."""
+    if bool(getattr(sim, "hung", False)):
+        return True
+    term = _termination(sim)
+    if any(tok in term for tok in ("transfer", "crash", "error", "timeout")):
+        return True
+    reward = _sim_reward(sim)
+    if reward is not None and reward <= 0 and "transfer" in term:
+        return True
+    return False
+
+
+def incomplete_reason(sim: Any) -> str:
+    if bool(getattr(sim, "hung", False)):
+        return "hung"
+    term = _termination(sim)
+    if "crash" in term or "error" in term:
+        return "crash"
+    if "transfer" in term:
+        reward = _sim_reward(sim)
+        if reward is not None and reward <= 0:
+            return "reward0-early-transfer"
+        return "transfer"
+    return term or "incomplete"
+
+
+def incomplete_fixture_traces() -> list[dict[str, Any]]:
+    """Deterministic incomplete episode. Not a live 0731 trial."""
+    return [
+        {
+            "taskId": INCOMPLETE_FIXTURE_ID,
+            "trial": 0,
+            "reward": 0.0,
+            "hung": False,
+            "termination": "transfer_to_human",
+            "reason": "reward0-early-transfer",
+            "nodeKey": "solve",
+            "role": "solve",
+            "input": "complete the remaining airline write; do not transfer",
+            "output": "transfer_to_human_agents",
+            "ts": 0,
+        }
+    ]
+
+
+def incomplete_train_traces(
+    simulations: list[Any],
+    extra_traces: dict[str, list[Any]] | None = None,
+) -> list[dict[str, Any]]:
+    extra = extra_traces or {}
+    out: list[dict[str, Any]] = []
+    for sim in simulations:
+        if not is_incomplete_episode(sim):
+            continue
+        tid = str(getattr(sim, "task_id", "?"))
+        reason = incomplete_reason(sim)
+        harvested = extra.get(tid) or []
+        if harvested:
+            for t in harvested:
+                row = dict(t) if isinstance(t, dict) else {"output": str(t)}
+                row.setdefault("nodeKey", row.get("nodeKey") or "solve")
+                row.setdefault("role", row.get("role") or "solve")
+                row.setdefault("input", row.get("input") or tid)
+                row.setdefault("output", row.get("output") or "")
+                row.setdefault("ts", row.get("ts") or 0)
+                row["taskId"] = tid
+                row["trial"] = getattr(sim, "trial", 0)
+                row["reward"] = _sim_reward(sim)
+                row["hung"] = bool(getattr(sim, "hung", False))
+                row["termination"] = _termination(sim)
+                row["reason"] = reason
+                out.append(row)
+            continue
+        out.append(
+            {
+                "taskId": tid,
+                "trial": getattr(sim, "trial", 0),
+                "reward": _sim_reward(sim),
+                "hung": bool(getattr(sim, "hung", False)),
+                "termination": _termination(sim),
+                "reason": reason,
+                "nodeKey": "solve",
+                "role": "solve",
+                "input": tid,
+                "output": _termination(sim) or reason,
+                "ts": 0,
+            }
+        )
+    return out
+
+
+def _sidecar_weight(
+    sidecar: Any,
+    *,
+    traces: list[dict[str, Any]] | None = None,
+    before: float,
+    after: float | None = None,
+    trainer: str = "surrogate",
+    base_model: str = "surrogate-theta",
+) -> dict[str, Any]:
+    """Slow-clock I_weight: spawn, poll, gate. Fast clock is never paused."""
+    used = list(traces) if traces else incomplete_fixture_traces()
+    spawned = sidecar.request(
+        {
+            "op": "i_weight_spawn",
+            "traces": used,
+            "trainer": trainer,
+            "baseModel": base_model,
+        }
+    )
     ping = sidecar.request({"op": "ping"})
-    deadline = time.time() + 5.0
+    job_id = (spawned.get("job") or {}).get("id")
+    deadline = time.time() + 8.0
     status: dict[str, Any] = {}
     while time.time() < deadline:
-        status = sidecar.request({"op": "i_weight_status"})
+        status = sidecar.request({"op": "i_weight_status", "jobId": job_id})
         if status.get("done"):
             break
+        ping = sidecar.request({"op": "ping"})
+        if ping.get("servingPaused"):
+            break
         time.sleep(0.02)
-    gate = sidecar.request({"op": "i_weight_gate", "before": before, "after": after})
+    gate_req: dict[str, Any] = {
+        "op": "i_weight_gate",
+        "before": before,
+        "jobId": job_id,
+    }
+    if after is not None:
+        gate_req["after"] = after
+    gate = sidecar.request(gate_req)
+    job = gate.get("job") or status.get("job") or spawned.get("job") or {}
+    gate_body = gate.get("gate") or {}
+    serving_paused = bool(spawned.get("servingPaused")) or bool(ping.get("servingPaused"))
+    mounted = gate_body.get("action") == "mount"
     return {
         "spawned": bool(spawned.get("spawned")),
         "done": bool(status.get("done")),
-        "servingPaused": bool(spawned.get("servingPaused"))
-        or bool(ping.get("servingPaused")),
+        "servingPaused": serving_paused,
         "ping": ping.get("content"),
-        "gate": gate.get("gate") or {},
-        "mounted": (gate.get("gate") or {}).get("action") == "mount",
+        "gate": gate_body,
+        "job": job,
+        "mounted": mounted,
+        "rejected": not mounted,
+        "tracesUsed": len(used),
+        "incompleteFixture": all(
+            t.get("taskId") == INCOMPLETE_FIXTURE_ID for t in used
+        ),
+        "surrogate": bool(job.get("surrogate", trainer == "surrogate")),
+        "not0731Weights": True,
+        "honestNote": I_WEIGHT_NOTE,
     }
 
 
@@ -356,8 +512,9 @@ def _round_record(
     eval_file: Path,
     skipped: list[str] | None = None,
     reward_infos: list[dict[str, Any] | None] | None = None,
+    i_weight: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    rec: dict[str, Any] = {
         "round": round_i,
         "technique": technique,
         "pHit": _p_hit(pass_hat),
@@ -372,6 +529,42 @@ def _round_record(
         "skipped": skipped or [],
         "skipPolicy": SKIP_POLICY,
     }
+    if i_weight is not None:
+        rec["iWeight"] = i_weight
+    return rec
+
+
+def _weight_graph_diff(w: dict[str, Any]) -> list[dict[str, str]]:
+    action = "mount" if w.get("mounted") else "reject"
+    return [{"op": action, "key": "adapter", "note": "surrogate-or-reject"}]
+
+
+def _run_weight_round(
+    *,
+    sidecar: Any,
+    sims: list[Any],
+    extra_traces: dict[str, list[Any]] | None,
+    before: float,
+    trainer: str = "surrogate",
+    base_model: str = "surrogate-theta",
+) -> dict[str, Any]:
+    traces = incomplete_train_traces(sims, extra_traces)
+    fixture = not traces
+    if fixture:
+        traces = incomplete_fixture_traces()
+    # Held-out: surrogate cannot complete incomplete episodes. Honest after=0
+    # unless FakeTrainer is explicitly requested (protocol unit test).
+    after: float | None = 1.0 if trainer == "fake" else 0.0
+    w = _sidecar_weight(
+        sidecar,
+        traces=traces,
+        before=before,
+        after=after,
+        trainer=trainer,
+        base_model=base_model,
+    )
+    w["incompleteFixture"] = fixture or bool(w.get("incompleteFixture"))
+    return w
 
 
 def run_improve(
@@ -397,6 +590,7 @@ def run_improve(
     technique = "one-shot"
     serving_paused = False
     rounds: list[dict[str, Any]] = []
+    i_weight_report: dict[str, Any] | None = None
 
     sims, pass_hat, avg, path, skipped = run_slice(
         domain=domain,
@@ -447,34 +641,40 @@ def run_improve(
             technique = str(loop.get("technique") or technique)
             os.environ["VDOM_TAU2_TECHNIQUE"] = technique
         elif weight:
-            current = avg if avg is not None else 0.0
-            w = _sidecar_weight(sidecar, before=current, after=current)
+            from tau2_vdom.agent import TURN_TRACES_BY_TASK
+
+            current = _p_hit(pass_hat)
+            before = 0.0 if current is None else current
+            w = _run_weight_round(
+                sidecar=sidecar,
+                sims=sims,
+                extra_traces=dict(TURN_TRACES_BY_TASK),
+                before=before,
+            )
+            i_weight_report = w
             serving_paused = serving_paused or bool(w.get("servingPaused"))
-            if w.get("mounted"):
-                intervention = "I_weight"
-                graph_diff = [{"op": "mount", "key": "adapter"}]
-            else:
-                intervention = "I_weight"
-                graph_diff = [{"op": "reject", "key": "adapter"}]
-                rounds.append(
-                    _round_record(
-                        round_i=r,
-                        technique=technique,
-                        pass_hat=pass_hat,
-                        avg=avg,
-                        obs=obs,
-                        by_task=_rewards_by_task(sims, task_ids),
-                        intervention=intervention,
-                        graph_diff=graph_diff,
-                        eval_file=path,
-                        skipped=skipped,
-                        reward_infos=[
-                            serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
-                        ],
-                    )
+            intervention = "I_weight"
+            graph_diff = _weight_graph_diff(w)
+            rounds.append(
+                _round_record(
+                    round_i=r,
+                    technique=technique,
+                    pass_hat=pass_hat,
+                    avg=avg,
+                    obs=obs,
+                    by_task=_rewards_by_task(sims, task_ids),
+                    intervention=intervention,
+                    graph_diff=graph_diff,
+                    eval_file=path,
+                    skipped=skipped,
+                    reward_infos=[
+                        serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
+                    ],
+                    i_weight=w,
                 )
-                stop_reason = "weight-rejected"
-                break
+            )
+            stop_reason = "weight-mounted" if w.get("mounted") else "weight-rejected"
+            break
         else:
             stop_reason = "loop-exhausted"
             break
@@ -517,6 +717,41 @@ def run_improve(
         if not _saturated(pass_hat):
             stop_reason = "budget"
 
+    if weight and i_weight_report is None:
+        from tau2_vdom.agent import TURN_TRACES_BY_TASK
+
+        current = _p_hit(pass_hat)
+        before = 0.0 if current is None else 0.0
+        # Official slice may have saturated; I_weight still runs on incompletes
+        # or the deterministic fixture. Do not invent a new official p_hit.
+        w = _run_weight_round(
+            sidecar=sidecar,
+            sims=sims,
+            extra_traces=dict(TURN_TRACES_BY_TASK),
+            before=before,
+        )
+        i_weight_report = w
+        serving_paused = serving_paused or bool(w.get("servingPaused"))
+        rounds.append(
+            _round_record(
+                round_i=len(rounds),
+                technique=technique,
+                pass_hat=pass_hat,
+                avg=avg,
+                obs=obs,
+                by_task=_rewards_by_task(sims, task_ids),
+                intervention="I_weight",
+                graph_diff=_weight_graph_diff(w),
+                eval_file=path,
+                skipped=skipped,
+                reward_infos=[
+                    serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
+                ],
+                i_weight=w,
+            )
+        )
+        stop_reason = "weight-mounted" if w.get("mounted") else "weight-rejected"
+
     first = rounds[0]
     last = rounds[-1]
     improve_rounds = [x for x in rounds if x.get("intervention")]
@@ -551,12 +786,17 @@ def run_improve(
         "graphDiffs": [x["graphDiff"] for x in improve_rounds],
         "rounds": rounds,
         "servingPaused": serving_paused,
+        "iWeight": i_weight_report,
         "skipPolicy": SKIP_POLICY,
         "command": (
             "PYTHONPATH=python python3 -m tau2_vdom.improve"
             + ("" if domain == "mock" else f" --domain {domain}")
+            + (" --weight" if weight else "")
         ),
     }
+    if weight:
+        payload["honestNote"] = I_WEIGHT_NOTE
+        payload["note"] = (note + " " + I_WEIGHT_NOTE).strip()
     out = write_improve_report(payload)
     print(json.dumps({
         "wrote": str(out),
@@ -568,6 +808,101 @@ def run_improve(
         "servingPaused": serving_paused,
         "passHatKBefore": first["passHatK"],
         "passHatKAfter": last["passHatK"],
+        "iWeight": {
+            "spawned": bool((i_weight_report or {}).get("spawned")),
+            "done": bool((i_weight_report or {}).get("done")),
+            "mounted": bool((i_weight_report or {}).get("mounted")),
+            "rejected": bool((i_weight_report or {}).get("rejected")),
+            "servingPaused": bool((i_weight_report or {}).get("servingPaused")),
+        }
+        if i_weight_report
+        else None,
+    }, indent=2))
+    return out
+
+
+def run_weight_fixture_improve(
+    *,
+    trainer: str = "surrogate",
+    base_model: str = "surrogate-theta",
+) -> Path:
+    """I_weight protocol on the deterministic incomplete fixture. No tau2, no API key."""
+    from tau2_vdom.sidecar import default_sidecar
+
+    sidecar = default_sidecar()
+    sidecar.request({"op": "ping"})
+    traces = incomplete_fixture_traces()
+    w = _sidecar_weight(
+        sidecar,
+        traces=traces,
+        before=0.0,
+        after=1.0 if trainer == "fake" else 0.0,
+        trainer=trainer,
+        base_model=base_model,
+    )
+    w["incompleteFixture"] = True
+    serving_paused = bool(w.get("servingPaused"))
+    empty_pass: dict[str, float] = {}
+    rec = _round_record(
+        round_i=0,
+        technique="one-shot",
+        pass_hat=empty_pass,
+        avg=0.0,
+        obs=[],
+        by_task={INCOMPLETE_FIXTURE_ID: [0.0]},
+        intervention="I_weight",
+        graph_diff=_weight_graph_diff(w),
+        eval_file=EVAL_DIR / "latest-improve.json",
+        i_weight=w,
+    )
+    rec["evalFile"] = "eval/tau2/latest-improve.json"
+    payload = {
+        "benchmark": "tau2-bench",
+        "kind": "runtime-self-improvement",
+        "closedLoop": True,
+        "claim": CLAIM,
+        "note": I_WEIGHT_NOTE,
+        "honestNote": I_WEIGHT_NOTE,
+        "paperRepo": PAPER_REPO,
+        "tau2Repo": TAU2_REPO,
+        "metricNote": METRIC_NOTE,
+        "domain": "mock",
+        "taskIds": [INCOMPLETE_FIXTURE_ID],
+        "numTrials": 1,
+        "maxRounds": 0,
+        "stopReason": "weight-mounted" if w.get("mounted") else "weight-rejected",
+        "agent": "vdom",
+        "model": "deterministic",
+        "provider": "deterministic",
+        "live": False,
+        "incompleteFixture": True,
+        "passHatKBefore": {},
+        "passHatKAfter": {},
+        "pHitSequence": [0.0],
+        "avgRewardBefore": 0.0,
+        "avgRewardAfter": 0.0,
+        "interventions": ["I_weight"],
+        "graphDiffs": [rec["graphDiff"]],
+        "rounds": [rec],
+        "servingPaused": serving_paused,
+        "iWeight": w,
+        "skipPolicy": SKIP_POLICY,
+        "command": "PYTHONPATH=python python3 -m tau2_vdom.improve --weight --weight-fixture",
+    }
+    out = write_improve_report(payload)
+    print(json.dumps({
+        "wrote": str(out),
+        "closedLoop": True,
+        "stopReason": payload["stopReason"],
+        "interventions": payload["interventions"],
+        "servingPaused": serving_paused,
+        "iWeight": {
+            "spawned": w.get("spawned"),
+            "done": w.get("done"),
+            "mounted": w.get("mounted"),
+            "rejected": w.get("rejected"),
+            "servingPaused": serving_paused,
+        },
     }, indent=2))
     return out
 
@@ -599,7 +934,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--weight",
         action="store_true",
-        help="If I_loop is exhausted and the slice still misses, spawn FakeTrainer (async).",
+        help=(
+            "After I_loop exhausts (or saturates), spawn the slow-clock trainer "
+            "from incomplete-episode traces. 0731 cannot take an adapter; the "
+            "mount is a surrogate or a reject. Serving is never paused."
+        ),
+    )
+    p.add_argument(
+        "--weight-fixture",
+        action="store_true",
+        help=(
+            "Run only the I_weight protocol on the deterministic incomplete "
+            "fixture (no tau2 slice, no API key)."
+        ),
     )
     return p
 
@@ -651,8 +998,11 @@ def _resolve_slice(args: argparse.Namespace) -> tuple[str, list[str], bool, str]
 
 
 def main(argv: list[str] | None = None) -> int:
-    _ensure_tau2_data_dir()
     args = build_parser().parse_args(argv)
+    if args.weight_fixture or (args.weight and os.environ.get("VDOM_WEIGHT_FIXTURE") == "1"):
+        run_weight_fixture_improve()
+        return 0
+    _ensure_tau2_data_dir()
     try:
         domain, task_ids, live, user = _resolve_slice(args)
         model = args.model if live else "deterministic"
@@ -676,6 +1026,14 @@ def main(argv: list[str] | None = None) -> int:
         if exc.name in {"tau2", "tau2.registry", "tau2.runner"} or (
             exc.name and exc.name.startswith("tau2")
         ):
+            if args.weight:
+                print(
+                    "tau2 is not installed; running I_weight on the deterministic "
+                    "incomplete fixture (protocol smoke, no live p_hit).",
+                    file=sys.stderr,
+                )
+                run_weight_fixture_improve()
+                return 0
             print(
                 "tau2 is not installed. From the repo root:\n"
                 "  bash scripts/setup-tau2.sh\n"

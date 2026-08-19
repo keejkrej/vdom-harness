@@ -79,6 +79,11 @@ npm run eval:tau2:smoke
 # so two rounds actually change p_hit (0 → 0.5 → 1.0).
 PYTHONPATH=python python3 -m tau2_vdom.improve
 npm run eval:tau2:improve
+
+# I_weight slow clock (no key): after I_loop, spawn a TrainJob from incomplete
+# traces (or the deterministic fixture). Serving is never paused.
+PYTHONPATH=python python3 -m tau2_vdom.improve --weight
+PYTHONPATH=python python3 -m tau2_vdom.improve --weight --weight-fixture
 ```
 
 `eval/tau2/latest-improve.json` records the **sequence** of rounds: `pHit` / `passHatK` / `taskPHit`, Obs, intervention, and graph diff per round. Scores are not invented. If a live slice is already 1.0 under the naive graph, the report stops after the first Obs (`stopReason: saturated`).
@@ -115,7 +120,7 @@ Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
 
 1. **Harness (capability)** — propose a `kind: "capability"` node with a `source` ref → sandbox validation → eval (`runBenchmark`) → mount on success. Raw scientist JSON is never executed; only `module:<id>` refs (or exact fingerprints) against a pre-approved capability registry pass the sandbox. Failed eval leaves the live graph unchanged.
 
-2. **Weights (adapter)** — an injectable `Trainer` runs out-of-process (tests use `FakeTrainer`) and returns an `AdapterArtifact`. A `kind: "adapter"` node carries `adapterRef` / `modelRef`; on a passing gate the target agent's `model` pointer updates (same binding as AgentNode.model → PhysicalNode.provider). Failed eval rejects the candidate; a later regression can `rollbackAdapter` (unmount + restore previous model).
+2. **Weights (adapter)** — an injectable `Trainer` runs out-of-process (tests use `FakeTrainer`) and returns an `AdapterArtifact`. A `kind: "adapter"` node carries `adapterRef` / `modelRef`; on a passing gate the target agent's `model` pointer updates (same binding as AgentNode.model → PhysicalNode.provider). Failed eval rejects the candidate; a later regression can `rollbackAdapter` (unmount + restore previous model). I_weight is the slow clock for incomplete episodes; 0731 is API-frozen so the mount is a surrogate or a reject, never a fake LoRA.
 
 `improveLoop` chooses topology, capability, or adapter (or `auto`). Real LoRA / Hugging Face Jobs stay behind the `Trainer` port — see `describeHfJobsExtension` in `src/trainer.ts`. No in-process GPU training.
 
@@ -145,3 +150,4 @@ package.json defines demo, test, build, export, and viz. After installing packag
     npm i && npm test && npm run demo
     npm run eval:tau2:smoke     # official τ² mock create_task_1, no API key
     npm run eval:tau2:improve   # naive → Obs → I_loop → same tasks (update_task_1)
+    npm run eval:tau2:improve:weight  # I_loop then I_weight TrainJob (surrogate or reject)

@@ -2,13 +2,25 @@
  * Stdio JSONL sidecar. Python HalfDuplexAgent sends one turn per line.
  * Logs go to stderr so stdout stays machine-readable.
  *
- * Serving does not pause on I_loop / I_weight: set_technique and i_loop
- * mutate in-process state; i_weight_spawn returns immediately.
+ * Two-clock I_weight: set_technique / i_loop / turn keep answering (fast clock).
+ * i_weight_spawn returns immediately with a TrainJob; servingPaused is always
+ * false. 0731 cannot take an adapter — default trainer is SurrogateTrainer.
  */
 import { createProvider, DeterministicProvider, type Message, type ToolSpec } from "../providers.js";
 import { runTau2Turn } from "./tau2-turn.js";
 import { type AgentGraph } from "../ir.js";
-import { FakeTrainer } from "../trainer.js";
+import {
+  FakeTrainer,
+  SurrogateTrainer,
+  type TrainJob,
+  type TrainerKind,
+  activeTrainJob,
+  getTrainJob,
+  localHeldOutScore,
+  persistTrainJob,
+  recordTrainJobGate,
+  spawnTrainJob,
+} from "../trainer.js";
 import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { applyILoop, gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
 import { tau2Graph } from "./tau2-graph.js";
@@ -26,6 +38,10 @@ type Incoming = {
   before?: number;
   after?: number;
   obs?: Tau2Obs | Tau2Obs[];
+  traces?: unknown[];
+  trainer?: TrainerKind;
+  jobId?: string;
+  baseModel?: string;
 };
 
 type SidecarReply = Tau2TurnResponse & {
@@ -36,14 +52,11 @@ type SidecarReply = Tau2TurnResponse & {
   spawned?: boolean;
   done?: boolean;
   gate?: ReturnType<typeof gateWeightMount>;
+  job?: TrainJob;
 };
 
 let currentTechnique: Tau2Technique = "one-shot";
 let currentGraph: AgentGraph = tau2Graph("one-shot");
-let weightJob: { spawned: boolean; done: boolean; artifactId?: string } = {
-  spawned: false,
-  done: false,
-};
 
 function write(obj: SidecarReply): void {
   process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -121,36 +134,66 @@ async function handle(line: string): Promise<void> {
   }
 
   if (req.op === "i_weight_spawn") {
-    weightJob = { spawned: true, done: false };
-    // Async trainer: do not block this request. Serving keeps answering.
-    const trainer = new FakeTrainer();
-    void trainer.train([], { baseModel: "base", technique: "fake-lora" }).then((art) => {
-      weightJob = { spawned: true, done: true, artifactId: art.id };
+    const trainerKind: TrainerKind = req.trainer === "fake" ? "fake" : "surrogate";
+    const trainer = trainerKind === "fake" ? new FakeTrainer() : new SurrogateTrainer();
+    const job = spawnTrainJob({
+      trainer,
+      traces: req.traces ?? [],
+      trainOpts: {
+        baseModel: req.baseModel ?? req.model ?? "surrogate-theta",
+        technique: trainerKind === "fake" ? "fake-lora" : "surrogate-prefix",
+      },
+      trainerKind,
+      persist: true,
     });
     write({
       op: "ok",
       id,
       spawned: true,
-      done: false,
+      done: job.status === "done",
       servingPaused: false,
+      job,
+      content: job.id,
     });
     return;
   }
 
   if (req.op === "i_weight_status") {
+    const job = (req.jobId ? getTrainJob(req.jobId) : undefined) ?? activeTrainJob();
     write({
       op: "ok",
       id,
-      spawned: weightJob.spawned,
-      done: weightJob.done,
+      spawned: Boolean(job),
+      done: job?.status === "done" || job?.status === "failed",
       servingPaused: false,
-      content: weightJob.artifactId,
+      job,
+      content: job?.artifactPointer ?? job?.id,
     });
     return;
   }
 
   if (req.op === "i_weight_gate") {
-    const gate = gateWeightMount(Number(req.before ?? 0), Number(req.after ?? 0));
+    const job = (req.jobId ? getTrainJob(req.jobId) : undefined) ?? activeTrainJob();
+    const before = Number(req.before ?? 0);
+    const after =
+      req.after !== undefined && req.after !== null
+        ? Number(req.after)
+        : job
+          ? localHeldOutScore(job)
+          : before;
+    const gate = gateWeightMount(before, after);
+    if (job) {
+      const updated = recordTrainJobGate(job.id, gate, true);
+      persistTrainJob(updated ?? job);
+      write({
+        op: "ok",
+        id,
+        gate,
+        job: updated ?? getTrainJob(job.id) ?? job,
+        servingPaused: false,
+      });
+      return;
+    }
     write({
       op: "ok",
       id,

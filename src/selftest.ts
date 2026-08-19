@@ -34,9 +34,17 @@ import {
 import {
   FakeTrainer,
   FailingTrainer,
+  SurrogateTrainer,
   clearArtifactRegistry,
   getArtifact,
   describeHfJobsExtension,
+  spawnTrainJob,
+  waitTrainJob,
+  recordTrainJobGate,
+  clearTrainJobs,
+  localHeldOutScore,
+  isFrozenApiModel,
+  FROZEN_API_MODEL,
 } from "./trainer.js";
 import {
   gateCapability,
@@ -555,6 +563,66 @@ async function testImproveLoopCapability(): Promise<void> {
   resetImprovementFixtures();
 }
 
+async function testTwoClockTrainJob(): Promise<void> {
+  resetImprovementFixtures();
+  clearTrainJobs();
+  const traces = [
+    {
+      nodeKey: "solve",
+      role: "solve",
+      input: "finish the episode",
+      output: "transfer_to_human_agents",
+      ts: 1,
+      reason: "reward0-early-transfer",
+      taskId: "incomplete_fixture_1",
+      reward: 0,
+    },
+  ];
+  const job = spawnTrainJob({
+    trainer: new FakeTrainer(),
+    traces,
+    trainOpts: { baseModel: "base", technique: "fake-lora" },
+    persist: false,
+  });
+  assertEq(job.servingPaused, false, "spawn never pauses serve");
+  assert(
+    job.status === "running" || job.status === "done",
+    "slow clock is running or already done",
+  );
+  assertEq(job.not0731Weights, true, "job never claims 0731 weights");
+  assertEq(job.tracesUsed.length, 1, "incomplete traces recorded");
+
+  const done = await waitTrainJob(job.id);
+  assertEq(done.status, "done", "FakeTrainer job completes");
+  assert(done.artifactPointer != null, "artifact pointer set");
+  assertEq(localHeldOutScore(done), 1, "FakeTrainer held-out is the protocol unit test");
+
+  const gated = recordTrainJobGate(
+    done.id,
+    { arm: "I_weight", action: "reject", before: 0, after: 0, reason: "no raise" },
+    false,
+  );
+  assertEq(gated?.gate?.action, "reject", "honest reject recorded");
+  assertEq(gated?.servingPaused, false, "gate never pauses serve");
+
+  const sjob = spawnTrainJob({
+    trainer: new SurrogateTrainer(),
+    traces,
+    trainOpts: { baseModel: FROZEN_API_MODEL, technique: "surrogate-prefix" },
+    persist: false,
+  });
+  const sdone = await waitTrainJob(sjob.id);
+  assertEq(sdone.surrogate, true, "SurrogateTrainer labeled surrogate");
+  assertEq(sdone.not0731Weights, true, "0731 base model still not 0731 weights");
+  assertEq(sdone.servingPaused, false, "surrogate spawn does not pause serve");
+  assert(String(sdone.artifact?.uri ?? "").startsWith("file://"), "file-backed artifact");
+  assert(String(sdone.artifact?.meta?.note ?? "").includes("Not 0731"), "artifact says not 0731");
+  assertEq(localHeldOutScore(sdone), 0, "surrogate cannot raise p_hit — honest reject");
+  assert(isFrozenApiModel(FROZEN_API_MODEL), "0731 is the frozen API model");
+  clearTrainJobs();
+  resetImprovementFixtures();
+}
+
 async function testHfExtensionDoc(): Promise<void> {
   const doc = describeHfJobsExtension({ baseModel: "gpt-ish", technique: "lora" });
   assert(doc.includes("HF Jobs"), "HF Jobs extension doc present");
@@ -575,6 +643,7 @@ async function main(): Promise<void> {
     ["adapter train→mount→model pointer", testAdapterMount],
     ["adapter fail eval→unmount/rollback", testAdapterRollback],
     ["improveLoop capability path", testImproveLoopCapability],
+    ["two-clock I_weight TrainJob", testTwoClockTrainJob],
     ["HF Jobs extension docs", testHfExtensionDoc],
   ];
 
