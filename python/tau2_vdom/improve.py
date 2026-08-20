@@ -85,7 +85,7 @@ I_SKU_NOTE = (
     "Base SKU deepseek/deepseek-v4-flash-0731 until gate=mount rebinds "
     "n.model / provider to deepseek/deepseek-v4-pro-0813 (OpenRouter, GA 2026-08-12). "
     "Jump iff later serving model id is 0813. servingPaused stays false. "
-    "Not fine-tuning. FakeTrainer and LoRA are not this arm."
+    "Catalog rebind, not fine-tuning. FakeTrainer and LoRA are not this arm."
 )
 I_CATALOG_NOTE = I_SKU_NOTE
 I_WEIGHT_NOTE = (
