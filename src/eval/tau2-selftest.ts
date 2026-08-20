@@ -1122,6 +1122,86 @@ async function testTypedInterventionArms(): Promise<void> {
   assertEq(hungLoop.applyScope?.weighted.join(","), "41", "hung-only applyScope is weighted");
 }
 
+/** ICLR critic required log: post-gate airline 39/44 obs batch. */
+async function testPostGate3944Replay(): Promise<void> {
+  const obs39 = observeTau2({
+    traces: [],
+    taskId: "39",
+    reward: 0,
+    hung: false,
+    actions: [
+      {
+        kind: "text",
+        text: "I cannot cancel this economy reservation; a personal reason is not covered.",
+      },
+    ],
+    rewardInfo: {
+      reward: 0,
+      action_checks: [{ action: { name: "cancel_reservation" }, action_match: false }],
+    },
+  });
+  const obs44 = observeTau2({
+    traces: [],
+    taskId: "44",
+    reward: null,
+    hung: true,
+    termination: "timeout",
+    actions: [],
+  });
+
+  assertEq(obs39.taskId, "39", "replay task 39");
+  assertEq(obs39.hung, false, "39 completed");
+  assertEq(obs39.inventedPolicy, true, "39 policy attractor");
+  assertEq(obs39.refusedCancel, true, "39 refused cancel");
+  assertEq(obs39.arm, "I_loop", "39 completed policy miss → I_loop");
+  assertEq(
+    recommendIntervention(obs39, { loopExhausted: false }),
+    "I_loop",
+    "39 stays I_loop when the loop is not exhausted",
+  );
+
+  assertEq(obs44.taskId, "44", "replay task 44");
+  assertEq(obs44.hung, true, "44 hung is a first-class predicate");
+  assertEq(obs44.nSuccessProxy, 0, "44 hung is not a hit");
+  assertEq(obs44.nSteps, 0, "44 nmsg 0");
+  assertEq(obs44.lastActions.length, 0, "44 no writes / no messages");
+  assertEq(obs44.arm, "I_weight", "44 hung/timeout → I_weight");
+  assertEq(
+    recommendIntervention(obs44, { loopExhausted: false }),
+    "I_weight",
+    "hung 44 is I_weight even when loopExhausted is false",
+  );
+  assertEq(
+    recommendIntervention(obs44, { loopExhausted: true }),
+    "I_weight",
+    "hung 44 is still I_weight when the loop is exhausted",
+  );
+  const oldRule44: "wait" | "I_loop" | "I_weight" =
+    obs44.nSuccessProxy === 1 ? "wait" : "I_loop";
+  assertEq(oldRule44, "I_loop", "sanity: pre-thesis rule I_loop-until-exhausted would pick I_loop for 44");
+  assert(
+    obs44.arm !== oldRule44,
+    "if 44 is I_loop unless loopExhausted, this test must fail",
+  );
+
+  const scope = computeApplyScope([obs39, obs44]);
+  assertEq(scope.waitKept.join(","), "", "post-gate 39/44 waitKept=[]");
+  assertEq(scope.looped.join(","), "39", "39 is looped");
+  assertEq(scope.weighted.join(","), "44", "44 is weighted / incomplete");
+  assertEq(
+    recommendSliceIntervention([obs39, obs44], { loopExhausted: false }),
+    "I_weight",
+    "slice prefers I_weight because 44 is hung, not I_loop-until-exhausted",
+  );
+
+  const prompt = formatSelfObsUser({ graph: tau2Graph("one-shot"), obs: [obs39, obs44] });
+  assert(prompt.includes("taskId=39"), "replay prompt lists 39");
+  assert(prompt.includes("taskId=44"), "replay prompt lists 44");
+  assert(prompt.includes("arm=I_loop"), "replay prompt lists I_loop");
+  assert(prompt.includes("arm=I_weight"), "replay prompt lists I_weight");
+  assert(!hasGoldReservationId(prompt), "replay prompt has no gold reservation IDs");
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -1155,6 +1235,7 @@ async function main(): Promise<void> {
     ["host applyILoop fallback uses the wait-hit gate", testApplyILoopFallbackWaitHitGate],
     ["self-Obs prompt has per-episode arms and no gold IDs", testSelfObsPromptHasEpisodesNoGoldIds],
     ["typed arms: hung I_weight / hit wait / policy I_loop", testTypedInterventionArms],
+    ["post-gate 39/44 replay: 39 I_loop, hung 44 I_weight, waitKept=[]", testPostGate3944Replay],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

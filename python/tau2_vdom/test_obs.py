@@ -11,6 +11,7 @@ from tau2_vdom.improve import (
 )
 from tau2_vdom.kernel_tools import strip_kernel_self_tools
 from tau2_vdom.runner import (
+    HungSimulation,
     _obs,
     recommend_intervention,
     recommend_slice_intervention,
@@ -272,6 +273,73 @@ def test_typed_arms_hung_hit_policy() -> None:
     assert scope["looped"] == ["39"]
 
 
+def test_post_gate_39_44_obs_batch() -> None:
+    """ICLR critic required log: post-gate airline 39/44. Hung is first-class."""
+    obs39 = _obs(
+        [
+            {
+                "kind": "text",
+                "text": "I cannot cancel this economy reservation; a personal reason is not covered.",
+                "ok": True,
+            }
+        ],
+        0.0,
+        [],
+        reward_info={"reward": 0.0, "action_checks": [{"action": {"name": "cancel_reservation"}, "action_match": False}]},
+        hung=False,
+        task_id="39",
+        termination="user_stop",
+    )
+    obs44 = _obs([], None, [], hung=True, task_id="44", termination="timeout")
+    assert obs39["taskId"] == "39"
+    assert obs39["arm"] == "I_loop"
+    assert obs39["hung"] is False
+    assert obs39["inventedPolicy"] is True
+    assert recommend_intervention(obs39, loop_exhausted=False) == "I_loop"
+
+    assert obs44["taskId"] == "44"
+    assert obs44["hung"] is True
+    assert obs44["nSuccessProxy"] == 0
+    assert obs44["nSteps"] == 0
+    assert obs44["lastActions"] == []
+    assert obs44["arm"] == "I_weight"
+    assert recommend_intervention(obs44, loop_exhausted=False) == "I_weight"
+    assert recommend_intervention(obs44, loop_exhausted=True) == "I_weight"
+    old_rule_44 = "wait" if obs44["nSuccessProxy"] == 1 else "I_loop"
+    assert old_rule_44 == "I_loop"
+    assert obs44["arm"] != old_rule_44
+
+    from types import SimpleNamespace
+
+    sim39 = SimpleNamespace(
+        task_id="39",
+        messages=[
+            SimpleNamespace(
+                role="assistant",
+                content="I cannot cancel this economy reservation; a personal reason is not covered.",
+                tool_calls=[],
+            )
+        ],
+        hung=False,
+        reward_info=SimpleNamespace(reward=0.0),
+        termination_reason="user_stop",
+    )
+    batch = _collect_obs([sim39, HungSimulation("44", 0, "timeout")])
+    assert [o["taskId"] for o in batch] == ["39", "44"]
+    assert batch[0]["arm"] == "I_loop"
+    assert batch[1]["arm"] == "I_weight"
+    assert batch[1]["hung"] is True
+    assert batch[1]["nSteps"] == 0
+    scope = apply_scope_from_obs(batch)
+    assert scope["waitKept"] == []
+    assert scope["looped"] == ["39"]
+    assert scope["weighted"] == ["44"]
+    assert recommend_slice_intervention(batch, loop_exhausted=False) == "I_weight"
+    blob = " ".join(str(o.get("lastActions")) for o in batch)
+    assert "MSJ4OA" not in blob
+    assert "S61CZX" not in blob
+
+
 def test_hit_still_waits() -> None:
     obs = _obs(
         [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
@@ -296,6 +364,7 @@ def main() -> int:
         test_obs_includes_task_id,
         test_apply_scope_mixed_wait_hit,
         test_collect_obs_sets_task_id,
+        test_post_gate_39_44_obs_batch,
         test_hit_still_waits,
     ]
     failed = 0
