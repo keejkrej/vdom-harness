@@ -3,10 +3,10 @@
  * Logs go to stderr so stdout stays machine-readable.
  *
  * Two-clock I_weight: set_technique / i_loop / turn keep answering (fast clock).
- * i_weight_spawn returns immediately with a TrainJob; servingPaused is always
- * false. 0731 cannot take an adapter — default trainer is SurrogateTrainer.
+ * i_weight_catalog is the actuator: propose pro-0813, gate, rebind n.model.
+ * servingPaused is always false. FakeTrainer / surrogate-prefix are not jumps.
  */
-import { createProvider, DeterministicProvider, type Message, type ToolSpec } from "../providers.js";
+import { createProvider, DeterministicProvider, resolveProvider, type Message, type ToolSpec } from "../providers.js";
 import { filterGymToolCalls, runTau2Turn } from "./tau2-turn.js";
 import { type AgentGraph } from "../ir.js";
 import {
@@ -29,6 +29,7 @@ import {
 } from "../trainer.js";
 import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
+import { applyIWeightCatalog, servingModelOfGraph } from "./tau2-weight.js";
 import { runSelfObs } from "./tau2-self-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { createInterface } from "node:readline";
@@ -72,6 +73,9 @@ type SidecarReply = Tau2TurnResponse & {
   applied?: boolean;
   graphEdits?: unknown;
   applyScope?: ApplyScope;
+  jumped?: boolean;
+  servingModel?: string;
+  catalog?: ReturnType<typeof applyIWeightCatalog>;
 };
 
 function providerFor(model?: string): ReturnType<typeof createProvider> {
@@ -211,6 +215,38 @@ async function handle(line: string): Promise<void> {
     return;
   }
 
+  if (req.op === "i_weight_catalog") {
+    const before = Number(req.before ?? 0);
+    const after = req.after !== undefined && req.after !== null ? Number(req.after) : before;
+    const catalog = applyIWeightCatalog({
+      graph: req.graph ?? currentGraph,
+      before,
+      after,
+    });
+    if (catalog.action === "mount") {
+      currentGraph = catalog.graph;
+      graphC0 = catalog.graph;
+    }
+    write({
+      op: "ok",
+      id,
+      servingPaused: false,
+      jumped: catalog.jumped,
+      servingModel: catalog.servingModelId,
+      catalog,
+      gate: {
+        arm: "I_weight",
+        action: catalog.action,
+        before: catalog.before,
+        after: catalog.after,
+        reason: catalog.reason,
+      },
+      graph: catalog.graph,
+      content: catalog.action,
+    });
+    return;
+  }
+
   if (req.op === "i_weight_spawn") {
     const trainerKind: TrainerKind = req.trainer === "fake" ? "fake" : "surrogate";
     const trainer = trainerKind === "fake" ? new FakeTrainer() : new SurrogateTrainer();
@@ -294,14 +330,19 @@ async function handle(line: string): Promise<void> {
       reqTechnique: req.technique,
       currentTechnique,
     });
+    const servingModel = servingModelOfGraph(live, req.model);
+    const provider =
+      servingModel === "deterministic" || servingModel === "scripted" || req.model === "deterministic"
+        ? new DeterministicProvider(servingModel)
+        : resolveProvider(servingModel);
     const result = await runTau2Turn({
       policy: req.policy ?? "",
       tools: req.tools ?? [],
       messages: req.messages ?? [],
       technique,
       graph: live,
-      model: req.model,
-      provider: req.model === "deterministic" ? new DeterministicProvider() : createProvider(),
+      model: servingModel,
+      provider,
     });
     if (
       req.taskId &&
@@ -334,6 +375,7 @@ async function handle(line: string): Promise<void> {
       graph: currentGraph,
       graphEdits: result.graphEdits,
       servingPaused: false,
+      servingModel: servingModelOfGraph(result.graph, servingModel),
     });
   } catch (err) {
     write({

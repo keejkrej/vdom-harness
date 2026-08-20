@@ -78,9 +78,13 @@ DEFAULT_MOCK_TASKS = ["update_task_1", "impossible_task_1"]
 RETAIL_HELD_OUT = ["5", "6", "7", "8", "9"]
 # Deterministic incomplete episode for the I_weight protocol smoke (no live key).
 INCOMPLETE_FIXTURE_ID = "incomplete_fixture_1"
+SERVING_MODEL = "deepseek/deepseek-v4-flash-0731"
+CATALOG_JUMP_MODEL = "deepseek/deepseek-v4-pro-0813"
 I_WEIGHT_NOTE = (
-    "I_weight is the slow clock for incomplete episodes; 0731 is API-frozen "
-    "so the mount is a surrogate or a reject, never a fake LoRA."
+    "I_weight is a gated catalog swap of f_θ, not post-training. "
+    "Serving stays on deepseek/deepseek-v4-flash-0731 until gate=mount rebinds "
+    "to deepseek/deepseek-v4-pro-0813 (OpenRouter, GA 2026-08-12). "
+    "servingPaused stays false. FakeTrainer and surrogate-prefix are not jumps."
 )
 
 
@@ -530,6 +534,46 @@ def incomplete_train_traces(
     return out
 
 
+def _sidecar_catalog_jump(
+    sidecar: Any,
+    *,
+    before: float,
+    after: float | None = None,
+) -> dict[str, Any]:
+    """I_weight actuator: propose pro-0813, gate, maybe rebind. Not post-training."""
+    req: dict[str, Any] = {
+        "op": "i_weight_catalog",
+        "model": CATALOG_JUMP_MODEL,
+        "before": before,
+    }
+    if after is not None:
+        req["after"] = after
+    res = sidecar.request(req)
+    ping = sidecar.request({"op": "ping"})
+    catalog = res.get("catalog") or {}
+    jumped = bool(res.get("jumped") or catalog.get("jumped"))
+    mounted = catalog.get("action") == "mount"
+    return {
+        "kind": "catalog-swap",
+        "notPostTraining": True,
+        "proposed": CATALOG_JUMP_MODEL,
+        "from": SERVING_MODEL,
+        "to": CATALOG_JUMP_MODEL,
+        "jumped": jumped,
+        "mounted": mounted,
+        "rejected": not mounted,
+        "servingPaused": bool(res.get("servingPaused")) or bool(ping.get("servingPaused")),
+        "servingModel": res.get("servingModel") or catalog.get("servingModelId") or SERVING_MODEL,
+        "gate": res.get("gate") or {},
+        "catalog": catalog,
+        "graph": res.get("graph") or catalog.get("graph"),
+        "honestNote": I_WEIGHT_NOTE,
+        "not0731Weights": True,
+        "spawned": True,
+        "done": True,
+    }
+
+
 def _sidecar_weight(
     sidecar: Any,
     *,
@@ -747,15 +791,11 @@ def run_improve(
         from tau2_vdom.agent import TURN_TRACES_BY_TASK
 
         slice_arm = recommend_slice_intervention(obs)
-        if slice_arm == "I_weight" and weight:
+        if slice_arm == "I_weight":
             current = _p_hit(pass_hat)
             before = 0.0 if current is None else current
-            w = _run_weight_round(
-                sidecar=sidecar,
-                sims=sims,
-                extra_traces=dict(TURN_TRACES_BY_TASK),
-                before=before,
-            )
+            # Catalog swap, not LoRA. Omit after → gate rejects (no invented win).
+            w = _sidecar_catalog_jump(sidecar, before=before)
             i_weight_report = w
             serving_paused = serving_paused or bool(w.get("servingPaused"))
             apply_scope = apply_scope_from_obs(obs)
@@ -768,7 +808,7 @@ def run_improve(
                     obs=obs,
                     by_task=_rewards_by_task(sims, task_ids),
                     intervention="I_weight",
-                    graph_diff=_weight_graph_diff(w),
+                    graph_diff=[{"op": "catalog-swap" if w.get("jumped") else "reject", "key": "solve", "note": "pro-0813"}],
                     eval_file=path,
                     skipped=skipped,
                     reward_infos=[
@@ -778,7 +818,7 @@ def run_improve(
                     apply_scope=apply_scope,
                 )
             )
-            stop_reason = "weight-mounted" if w.get("mounted") else "weight-rejected"
+            stop_reason = "weight-mounted" if w.get("jumped") else "weight-rejected"
             break
 
         loop = _sidecar_i_loop(
@@ -1141,9 +1181,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--weight",
         action="store_true",
         help=(
-            "After I_loop exhausts (or saturates), spawn the slow-clock trainer "
-            "from incomplete-episode traces. 0731 cannot take an adapter; the "
-            "mount is a surrogate or a reject. Serving is never paused."
+            "On I_weight (incomplete episode), propose catalog-swap to "
+            "deepseek/deepseek-v4-pro-0813 and gate it. Not post-training. "
+            "Serving is never paused."
         ),
     )
     p.add_argument(

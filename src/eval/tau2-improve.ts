@@ -399,8 +399,9 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
 /**
  * I_weight eval gate (slow clock). Mount only if the after-eval strictly beats
  * before. Serving keeps the old f_θ on reject (`servingPaused` stays false).
- * FakeTrainer exercises the protocol; a surrogate that cannot raise p_hit is
- * an honest reject — never a claimed 0731 LoRA.
+ * The real I_weight actuator is a catalog swap (see applyIWeightCatalog):
+ * propose pro-0813, gate, rebind n.model. FakeTrainer / surrogate-prefix are
+ * not jumps and must not be reported as a θ win.
  */
 export function gateWeightMount(before: number, after: number): WeightGateDecision {
   if (after > before) {
@@ -409,7 +410,7 @@ export function gateWeightMount(before: number, after: number): WeightGateDecisi
       action: "mount",
       before,
       after,
-      reason: "after-eval beats before; mount adapter",
+      reason: "after-eval beats before; catalog-swap may mount pro-0813",
     };
   }
   return {
@@ -417,6 +418,6 @@ export function gateWeightMount(before: number, after: number): WeightGateDecisi
     action: "reject",
     before,
     after,
-    reason: "after-eval did not beat before; serving keeps old f_theta",
+    reason: "after-eval did not beat before; serving keeps flash-0731 (not a jump)",
   };
 }

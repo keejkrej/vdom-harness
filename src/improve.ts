@@ -35,11 +35,10 @@ export type ImproveIter = {
  * adapter mount based on mode / traces. All non-topology paths go through
  * the eval gate before the live graph changes.
  *
- * Adapter / I_weight uses two clocks: serving keeps old θ (fast) while
- * `spawnTrainJob` trains from incomplete traces (slow). The live graph
- * changes only after `gateAdapter` / a held-out eval. servingPaused is never
- * set. FakeTrainer is the protocol unit test; SurrogateTrainer is an explicit
- * non-0731 θ (prompt-prefix stand-in), not a claimed API LoRA.
+ * Adapter / I_weight uses two clocks: serving keeps old θ (fast) while the
+ * slow clock requests a released checkpoint (catalog swap) or a protocol
+ * stub. servingPaused is never set. FakeTrainer / surrogate-prefix are not
+ * catalog jumps. The τ² I_weight actuator is applyIWeightCatalog → 0813.
  */
 export async function improveLoop(opts: {
   task: Task;

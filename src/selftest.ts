@@ -604,6 +604,10 @@ async function testTwoClockTrainJob(): Promise<void> {
   );
   assertEq(gated?.gate?.action, "reject", "honest reject recorded");
   assertEq(gated?.servingPaused, false, "gate never pauses serve");
+  assert(
+    !String(done.artifact?.resultModelId ?? "").includes("deepseek-v4-pro-0813"),
+    "FakeTrainer is not a catalog jump",
+  );
 
   const sjob = spawnTrainJob({
     trainer: new SurrogateTrainer(),

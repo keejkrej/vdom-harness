@@ -6,15 +6,19 @@ import json
 from types import SimpleNamespace
 
 from tau2_vdom.improve import (
+    CATALOG_JUMP_MODEL,
     EVAL_DIR,
     I_WEIGHT_NOTE,
     INCOMPLETE_FIXTURE_ID,
+    SERVING_MODEL,
+    _sidecar_catalog_jump,
     incomplete_fixture_traces,
     incomplete_reason,
     incomplete_train_traces,
     is_incomplete_episode,
     run_weight_fixture_improve,
 )
+from tau2_vdom.sidecar import default_sidecar
 
 
 def test_incomplete_picker() -> None:
@@ -58,6 +62,29 @@ def test_incomplete_fixture_shape() -> None:
     assert "transfer" in traces[0]["termination"]
 
 
+def test_catalog_jump_mounts_0813() -> None:
+    sidecar = default_sidecar()
+    reject = _sidecar_catalog_jump(sidecar, before=1.0, after=0.0)
+    assert reject["kind"] == "catalog-swap"
+    assert reject["jumped"] is False
+    assert reject["rejected"] is True
+    assert reject["servingPaused"] is False
+    assert reject["servingModel"] == SERVING_MODEL
+    assert reject["proposed"] == CATALOG_JUMP_MODEL
+    assert "not post-training" in reject["honestNote"]
+
+    mount = _sidecar_catalog_jump(sidecar, before=0.0, after=1.0)
+    assert mount["kind"] == "catalog-swap"
+    assert mount["jumped"] is True
+    assert mount["mounted"] is True
+    assert mount["servingPaused"] is False
+    assert mount["servingModel"] == CATALOG_JUMP_MODEL
+    graph = mount.get("graph") or (mount.get("catalog") or {}).get("graph") or {}
+    solve = (graph or {}).get("root") or {}
+    assert solve.get("model") == CATALOG_JUMP_MODEL
+    assert "not post-training" in (mount.get("honestNote") or "")
+
+
 def test_weight_fixture_writes_report() -> None:
     path = run_weight_fixture_improve()
     latest = EVAL_DIR / "latest-improve.json"
@@ -89,6 +116,7 @@ def main() -> int:
     tests = [
         test_incomplete_picker,
         test_incomplete_fixture_shape,
+        test_catalog_jump_mounts_0813,
         test_weight_fixture_writes_report,
     ]
     failed = 0

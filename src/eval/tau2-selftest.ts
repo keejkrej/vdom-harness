@@ -1,11 +1,14 @@
 import {
   DEFAULT_OPENROUTER_MODEL,
   DeterministicProvider,
+  registerProvider,
   resolveChatConfig,
   scriptedTau2MockTurn,
   type Message,
   type Provider,
 } from "../providers.js";
+import { RuntimeDOM } from "../reconciler.js";
+import { findNode } from "../ir.js";
 import { runTau2Turn } from "./tau2-turn.js";
 import { observeTau2, actionFromCompletion, markRepeats } from "./tau2-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
@@ -28,6 +31,16 @@ import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.j
 import { GOLD_RESERVATION_IDS, hasGoldReservationId, serializeKernelC } from "./tau2-kernel.js";
 import { formatSelfObsUser, runSelfObs, SELF_OBS_SYSTEM, SELF_OBS_WAIT_HIT_RULES } from "./tau2-self-obs.js";
 import { type Tau2Obs } from "./tau2-types.js";
+import {
+  applyIWeightCatalog,
+  CATALOG_JUMP_MODEL,
+  CATALOG_JUMP_NOTE,
+  proposeCatalogJump,
+  SERVING_MODEL,
+  servingModelOfGraph,
+  servingProviderAfterJump,
+  thetaJumped,
+} from "./tau2-weight.js";
 
 let passed = 0;
 let failed = 0;
@@ -1202,6 +1215,59 @@ async function testPostGate3944Replay(): Promise<void> {
   assert(!hasGoldReservationId(prompt), "replay prompt has no gold reservation IDs");
 }
 
+async function testCatalogJumpMounts0813(): Promise<void> {
+  const proposal = proposeCatalogJump();
+  assertEq(proposal.kind, "catalog-swap", "I_weight proposes a catalog swap, not a LoRA");
+  assertEq(proposal.model, CATALOG_JUMP_MODEL, "proposal model is pro-0813");
+  assertEq(proposal.servingPaused, false, "proposal never pauses serve");
+  assert(CATALOG_JUMP_NOTE.includes("not post-training"), "honest catalog-swap label");
+
+  const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
+  const mock0731 = new DeterministicProvider(SERVING_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, mock0731);
+
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const dom = new RuntimeDOM();
+  dom.reconcile(start);
+  assertEq(servingModelOfGraph(start), SERVING_MODEL, "pre-gate serving is 0731");
+  assertEq(dom.current.get("solve")?.provider?.model, SERVING_MODEL, "PhysicalNode bound to 0731");
+
+  const reject = applyIWeightCatalog({
+    graph: start,
+    before: 1,
+    after: 0,
+    provider: mock0813,
+    dom,
+  });
+  assertEq(reject.action, "reject", "rejected gate is a negative");
+  assertEq(reject.jumped, false, "reject is not a jump");
+  assertEq(thetaJumped(reject), false, "thetaJumped false on reject");
+  assertEq(servingModelOfGraph(reject.graph), SERVING_MODEL, "reject keeps 0731");
+  assertEq(findNode(reject.graph, "solve")?.model, SERVING_MODEL, "reject n.model stays 0731");
+
+  const mount = applyIWeightCatalog({
+    graph: start,
+    before: 0,
+    after: 1,
+    provider: mock0813,
+    dom,
+  });
+  assertEq(mount.action, "mount", "gate=mount");
+  assertEq(mount.jumped, true, "mount is a catalog jump");
+  assertEq(thetaJumped(mount), true, "θ jumped only on mount + 0813");
+  assertEq(servingModelOfGraph(mount.graph), CATALOG_JUMP_MODEL, "post-mount serving model id is 0813");
+  assertEq(findNode(mount.graph, "solve")?.model, CATALOG_JUMP_MODEL, "n.model rebound to 0813");
+  assertEq(
+    dom.current.get("solve")?.provider?.model,
+    CATALOG_JUMP_MODEL,
+    "PhysicalNode.provider rebound to 0813",
+  );
+  const later = servingProviderAfterJump(mount.graph, mock0731, dom);
+  assertEq(later.model, CATALOG_JUMP_MODEL, "later serving step uses 0813, not 0731");
+  assert(later !== mock0731, "later step is not the 0731 client");
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -1236,6 +1302,7 @@ async function main(): Promise<void> {
     ["self-Obs prompt has per-episode arms and no gold IDs", testSelfObsPromptHasEpisodesNoGoldIds],
     ["typed arms: hung I_weight / hit wait / policy I_loop", testTypedInterventionArms],
     ["post-gate 39/44 replay: 39 I_loop, hung 44 I_weight, waitKept=[]", testPostGate3944Replay],
+    ["I_weight catalog jump mounts 0813 (mocked bind, not LoRA)", testCatalogJumpMounts0813],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {
