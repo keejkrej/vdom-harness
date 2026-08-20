@@ -89,7 +89,7 @@ def test_catalog_jump_mounts_0813() -> None:
     graph = mount.get("graph") or (mount.get("catalog") or {}).get("graph") or {}
     solve = (graph or {}).get("root") or {}
     assert solve.get("model") == CATALOG_JUMP_MODEL
-    assert "not post-training" in (mount.get("honestNote") or "")
+    assert "not fine-tuning" in (mount.get("honestNote") or "")
 
 
 def test_weight_fixture_writes_report() -> None:
