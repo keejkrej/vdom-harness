@@ -66,7 +66,7 @@ const PATCH_ROLES = new Set(["critic", "refine", "validator", "policy", "policy-
  */
 export const SELF_OBS_WAIT_HIT_RULES = `Each episode lists taskId, reward, arm, hung, and write tool names (never reservation IDs).
 If arm is wait and reward is 1, do not infer a missed cancel/update for that task.
-If hung or incomplete (timeout / crash / no-write), arm is I_sku (catalog rebind licensed by hung/incomplete, not pick a pricier model); do not mount I_loop on those tasks.
+If hung or incomplete (timeout / crash / no-write), arm is I_sku (catalog rebind licensed by hung/incomplete, not pick a pricier model); do not mount I_loop on those tasks. A mixed batch applies BOTH buckets: I_loop on completed miss, I_sku on hung — do not consume only the slice arm.
 Do not mount a cancel-always / upgrade-always node that applies to wait-hit tasks.
 If you cannot write a gated patch (graphPatch.taskIds that leave wait-hit tasks on C0), return {"action":"wait"}.
 Never include reservation IDs in the patch.

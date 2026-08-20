@@ -155,10 +155,11 @@ export function graphsByApplyScope(
   graphBefore: AgentGraph,
   graphAfter: AgentGraph,
   scope: ApplyScope,
+  graphSku?: AgentGraph,
 ): Record<string, AgentGraph> {
   const out: Record<string, AgentGraph> = {};
   for (const id of scope.waitKept) out[id] = graphBefore;
-  for (const id of scope.weighted ?? []) out[id] = graphBefore;
+  for (const id of scope.weighted ?? []) out[id] = graphSku ?? graphBefore;
   for (const id of scope.looped) out[id] = graphAfter;
   return out;
 }
@@ -168,8 +169,12 @@ export function graphForScopedTask(
   graphAfter: AgentGraph,
   scope: ApplyScope,
   taskId: string,
+  graphSku?: AgentGraph,
 ): AgentGraph {
-  if (scope.waitKept.includes(taskId) || (scope.weighted ?? []).includes(taskId)) return graphBefore;
+  if (scope.waitKept.includes(taskId)) return graphBefore;
+  // SKU is a sibling serving graph for the weighted bucket. If omitted, isolation
+  // would serve unrebound C0 and swallow I_sku — callers must pass graphSku after a mount.
+  if ((scope.weighted ?? []).includes(taskId)) return graphSku ?? graphBefore;
   if (scope.looped.includes(taskId)) return graphAfter;
   if (scope.waitKept.length > 0 || (scope.weighted ?? []).length > 0) return graphBefore;
   return graphAfter;
@@ -182,14 +187,15 @@ export function selectServingGraph(opts: {
   currentGraph: AgentGraph;
   graphBefore: AgentGraph;
   graphAfter?: AgentGraph;
+  /** Sibling I_sku graph. Weighted tasks use this so C0 isolation cannot swallow 0813. */
+  graphSku?: AgentGraph;
   applyScope?: ApplyScope;
 }): AgentGraph {
   if (opts.reqGraph) return opts.reqGraph;
   const scope = opts.applyScope;
   if (opts.taskId && scope) {
-    if (scope.waitKept.includes(opts.taskId) || (scope.weighted ?? []).includes(opts.taskId)) {
-      return opts.graphBefore;
-    }
+    if (scope.waitKept.includes(opts.taskId)) return opts.graphBefore;
+    if ((scope.weighted ?? []).includes(opts.taskId)) return opts.graphSku ?? opts.graphBefore;
     if (scope.looped.includes(opts.taskId) && opts.graphAfter) return opts.graphAfter;
   }
   if (scope && (scope.waitKept.length > 0 || (scope.weighted ?? []).length > 0)) return opts.graphBefore;

@@ -358,6 +358,14 @@ def test_post_gate_39_44_obs_batch() -> None:
     assert ctrl["episodes"][1]["hung"] is True
     assert ctrl["episodes"][1]["license"] == "hung"
     assert ctrl["slice"] == "I_sku"
+    assert ctrl["buckets"]["39"] == "I_loop"
+    assert ctrl["buckets"]["44"] == "I_sku"
+    assert ctrl["applied"] == ["I_loop", "I_sku"]
+    assert not (
+        ctrl["slice"] == "I_sku"
+        and "I_loop" not in ctrl["applied"]
+        and "39" in ctrl["applyScope"]["looped"]
+    ), "if only slice is consumed, 39 I_loop is dropped"
     assert ctrl["applyScope"]["waitKept"] == []
     assert ctrl["servingPaused"] is False
     assert ctrl["trained"] is False

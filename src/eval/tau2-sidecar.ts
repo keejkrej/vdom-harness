@@ -91,11 +91,13 @@ let currentTechnique: Tau2Technique = "one-shot";
 let currentGraph: AgentGraph = tau2Graph("one-shot");
 let graphC0: AgentGraph = currentGraph;
 let graphC1: AgentGraph | undefined;
+let graphSku: AgentGraph | undefined;
 let applyScope: ApplyScope | undefined;
 
 function resetApplyScope(): void {
   applyScope = undefined;
   graphC1 = undefined;
+  graphSku = undefined;
   graphC0 = currentGraph;
 }
 
@@ -106,6 +108,7 @@ function liveGraph(taskId?: string, reqGraph?: AgentGraph): AgentGraph {
     currentGraph,
     graphBefore: graphC0,
     graphAfter: graphC1 ?? currentGraph,
+    graphSku,
     applyScope,
   });
 }
@@ -227,8 +230,9 @@ async function handle(line: string): Promise<void> {
       after,
     });
     if (catalog.action === "mount") {
-      currentGraph = catalog.graph;
-      graphC0 = catalog.graph;
+      // Sibling SKU graph for the weighted bucket. Do not overwrite C0 —
+      // wait-hit isolation would then either leak 0813 to hits or serve 44 on unrebound C0.
+      graphSku = catalog.graph;
     }
     write({
       op: "ok",

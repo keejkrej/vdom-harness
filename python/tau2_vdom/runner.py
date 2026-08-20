@@ -371,7 +371,7 @@ def control_batch(
     *,
     loop_exhausted: bool = False,
 ) -> dict[str, Any]:
-    """Landed controller. Hung/incomplete licenses I_sku, not pick a pricier model."""
+    """Landed controller. Applies BOTH buckets; slice alone drops I_loop on mixed 39/44."""
     from tau2_vdom.improve import apply_scope_from_obs
 
     episodes = [
@@ -383,10 +383,19 @@ def control_batch(
         }
         for o in obs_list
     ]
+    scope = apply_scope_from_obs(obs_list)
+    buckets = {str(e["taskId"]): e["arm"] for e in episodes if e.get("taskId")}
+    applied: list[str] = []
+    if scope.get("looped"):
+        applied.append("I_loop")
+    if scope.get("weighted"):
+        applied.append("I_sku")
     return {
         "episodes": episodes,
         "slice": recommend_slice_intervention(obs_list, loop_exhausted=loop_exhausted),
-        "applyScope": apply_scope_from_obs(obs_list),
+        "buckets": buckets,
+        "applied": applied,
+        "applyScope": scope,
         "servingPaused": False,
         "trained": False,
         "notFineTuning": True,

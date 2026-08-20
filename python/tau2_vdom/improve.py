@@ -809,17 +809,22 @@ def run_improve(
         miss = any(o.get("nSuccessProxy", 0) != 1 for o in obs)
         from tau2_vdom.agent import TURN_TRACES_BY_TASK
 
-        slice_arm = recommend_slice_intervention(obs)
-        if slice_arm == "I_sku":
+        ctrl = control_batch(obs)
+        slice_arm = ctrl["slice"]
+        apply_scope = ctrl["applyScope"]
+        applied = list(ctrl["applied"])
+        # Consume buckets, not slice. Mixed 39/44 is slice=I_sku but 39 still I_loop.
+        sku_w: dict[str, Any] | None = None
+        if "I_sku" in applied:
             current = _p_hit(pass_hat)
             before = 0.0 if current is None else current
-            # License is hung/incomplete. Gate is a measured after-eval, not 0813 exists.
-            # Omit after → reject (no invented win).
-            ctrl = control_batch(obs)
-            w = _sidecar_catalog_jump(sidecar, before=before)
-            i_sku_report = w
-            serving_paused = serving_paused or bool(w.get("servingPaused"))
-            apply_scope = apply_scope_from_obs(obs)
+            # Fixture after only at the controller; omit here so live airline
+            # cannot invent p_hit(0813)>p_hit(0731). 0813 existing is not a gate.
+            sku_w = _sidecar_catalog_jump(sidecar, before=before)
+            i_sku_report = sku_w
+            serving_paused = serving_paused or bool(sku_w.get("servingPaused"))
+
+        if "I_loop" not in applied and "I_sku" in applied:
             rounds.append(
                 _round_record(
                     round_i=r,
@@ -829,18 +834,18 @@ def run_improve(
                     obs=obs,
                     by_task=_rewards_by_task(sims, task_ids),
                     intervention="I_sku",
-                    graph_diff=[{"op": "catalog-rebind" if w.get("jumped") else "reject", "key": "solve", "note": "pro-0813"}],
+                    graph_diff=[{"op": "catalog-rebind" if sku_w.get("jumped") else "reject", "key": "solve", "note": "pro-0813"}],
                     eval_file=path,
                     skipped=skipped,
                     reward_infos=[
                         serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
                     ],
-                    i_sku=w,
+                    i_sku=sku_w,
                     apply_scope=apply_scope,
                     controller=ctrl,
                 )
             )
-            stop_reason = "catalog-mounted" if w.get("jumped") else "catalog-rejected"
+            stop_reason = "catalog-mounted" if sku_w.get("jumped") else "catalog-rejected"
             break
 
         loop = _sidecar_i_loop(
@@ -898,8 +903,12 @@ def run_improve(
             break
 
         if loop.get("applied"):
-            intervention = "I_loop"
-            graph_diff = loop.get("graphDiff") or []
+            intervention = "I_loop+I_sku" if sku_w is not None else "I_loop"
+            graph_diff = list(loop.get("graphDiff") or [])
+            if sku_w is not None:
+                graph_diff.append(
+                    {"op": "catalog-rebind" if sku_w.get("jumped") else "reject", "key": "solve", "note": "pro-0813"}
+                )
             technique = str(loop.get("technique") or technique)
             os.environ["VDOM_TAU2_TECHNIQUE"] = technique
         elif weight:
@@ -974,6 +983,8 @@ def run_improve(
                 self_obs_path=self_obs_path,
                 self_obs=self_obs_rec,
                 apply_scope=apply_scope,
+                i_sku=sku_w,
+                controller=ctrl,
             )
         )
         if _saturated(pass_hat):
