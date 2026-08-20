@@ -194,7 +194,7 @@ export function attachAdapter(
  * Eval-gate an adapter: retarget model → bench → mount | reject.
  * On reject, the previous model pointer is preserved (no live mount).
  *
- * TrainJob / adapter protocol stub — not the paper I_catalog arm.
+ * TrainJob / adapter protocol stub — not the paper I_sku arm.
  * The candidate is scored on a scratch DOM. The fast clock keeps serving
  * old θ (`servingPaused` stays false). Catalog swap, not post-training.
  */

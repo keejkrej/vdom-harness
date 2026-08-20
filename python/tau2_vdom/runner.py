@@ -318,19 +318,19 @@ def is_incomplete_obs(obs: dict[str, Any]) -> bool:
     return False
 
 
-def is_catalog_arm(arm: str | None) -> bool:
-    """Official incomplete arm is I_catalog. I_weight is a legacy trainer-stub alias."""
-    return arm in {"I_catalog", "I_weight"}
+def is_sku_arm(arm: str | None) -> bool:
+    """Official incomplete arm is I_sku. I_catalog / I_weight are prior/stub aliases."""
+    return arm in {"I_sku", "I_catalog", "I_weight"}
 
 
 def recommend_intervention(obs: dict[str, Any], *, loop_exhausted: bool = False) -> str:
-    """Per-episode arm: hit→wait; incomplete→I_catalog; completed miss→I_loop."""
+    """Per-episode arm: hit→wait; hung|crash|no-write→I_sku; completed miss→I_loop."""
     if obs.get("nSuccessProxy") == 1 and not obs.get("hung"):
         return "wait"
     if is_incomplete_obs(obs):
-        return "I_catalog"
+        return "I_sku"
     if loop_exhausted:
-        return "I_catalog"
+        return "I_sku"
     return "I_loop"
 
 
@@ -339,13 +339,13 @@ def recommend_slice_intervention(
     *,
     loop_exhausted: bool = False,
 ) -> str:
-    """I_catalog if ANY episode is incomplete; wait only if every episode hit."""
+    """I_sku if ANY episode is incomplete; wait only if every episode hit."""
     if obs_list and all(o.get("nSuccessProxy") == 1 and not o.get("hung") for o in obs_list):
         return "wait"
     if any(is_incomplete_obs(o) for o in obs_list):
-        return "I_catalog"
+        return "I_sku"
     if loop_exhausted:
-        return "I_catalog"
+        return "I_sku"
     return "I_loop"
 
 
@@ -389,10 +389,10 @@ def _obs(
         critique = "path measure hits S; wait"
     elif hung:
         critique = "trial hung or skipped; keep task in the set (null reward), retry once"
-    elif is_catalog_arm(arm):
+    elif is_sku_arm(arm):
         critique = (
-            "episode incomplete (hung / timeout / no-write); I_catalog "
-            "(catalog swap, not post-training)"
+            "episode incomplete (hung / crash / no-write); I_sku "
+            "(catalog rebind, not fine-tuning)"
         )
     elif recommend_policy:
         names = ", ".join(a["name"] for a in missed_policy) or "cancel/update"

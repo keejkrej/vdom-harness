@@ -645,7 +645,7 @@ async function testPickModeConsultsIncompleteTraces(): Promise<void> {
     },
   ];
   assertEq(tracesLookIncomplete(incomplete), true, "hung / transfer traces look incomplete");
-  assertEq(pickMode("auto", 0, incomplete), "adapter", "auto + incomplete traces → adapter / I_catalog");
+  assertEq(pickMode("auto", 0, incomplete), "adapter", "auto + incomplete traces → adapter / I_sku");
   assertEq(pickMode("capability", 0, incomplete), "capability", "explicit capability ignores traces");
 }
 

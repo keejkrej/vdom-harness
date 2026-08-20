@@ -1,4 +1,4 @@
-"""I_catalog catalog-rebind + I_weight TrainJob stub tests. No API key. No LoRA."""
+"""I_sku catalog rebind + I_weight TrainJob stub tests. No API key. No LoRA."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from tau2_vdom.improve import (
     CATALOG_JUMP_MODEL,
     EVAL_DIR,
-    I_CATALOG_NOTE,
+    I_SKU_NOTE,
     I_WEIGHT_NOTE,
     INCOMPLETE_FIXTURE_ID,
     SERVING_MODEL,
@@ -66,7 +66,7 @@ def test_incomplete_fixture_shape() -> None:
 def test_catalog_jump_mounts_0813() -> None:
     sidecar = default_sidecar()
     reject = _sidecar_catalog_jump(sidecar, before=1.0, after=0.0)
-    assert reject["arm"] == "I_catalog"
+    assert reject["arm"] == "I_sku"
     assert reject["kind"] == "catalog-rebind"
     assert reject["trained"] is False
     assert reject["jumped"] is False
@@ -74,11 +74,12 @@ def test_catalog_jump_mounts_0813() -> None:
     assert reject["servingPaused"] is False
     assert reject["servingModel"] == SERVING_MODEL
     assert reject["proposed"] == CATALOG_JUMP_MODEL
-    assert "catalog swap, not post-training" in reject["honestNote"]
-    assert I_CATALOG_NOTE in reject["honestNote"]
+    assert "catalog rebind" in reject["honestNote"]
+    assert "not fine-tuning" in reject["honestNote"]
+    assert I_SKU_NOTE in reject["honestNote"]
 
     mount = _sidecar_catalog_jump(sidecar, before=0.0, after=1.0)
-    assert mount["arm"] == "I_catalog"
+    assert mount["arm"] == "I_sku"
     assert mount["kind"] == "catalog-rebind"
     assert mount["trained"] is False
     assert mount["jumped"] is True

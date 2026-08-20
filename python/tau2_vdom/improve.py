@@ -1,6 +1,6 @@
 """Closed-loop runtime self-improvement on τ².
 
-self-observe → I_loop | I_catalog → run again → self-observe, until pass^k
+self-observe → I_loop | I_sku → run again → self-observe, until pass^k
 saturates or a round budget. Not a single before/after.
 
 Default no-key slice: official mock ``update_task_1`` + ``impossible_task_1``.
@@ -59,7 +59,7 @@ SATURATED_NOTE = (
     "Use mock update_task_1 + impossible_task_1 (no key), airline, or retail beyond 0–4."
 )
 CLAIM = (
-    "Closed loop: self-observe → I_loop or I_catalog → run again → self-observe, "
+    "Closed loop: self-observe → I_loop or I_sku → run again → self-observe, "
     "until pass^k saturates or the round budget. Serving does not pause. "
     "The agent may get_agent_graph / set_agent_graph mid-turn (local intercept) "
     "and may rewrite C on the slow-clock Obs; host I_loop is fallback if it never "
@@ -80,16 +80,18 @@ RETAIL_HELD_OUT = ["5", "6", "7", "8", "9"]
 INCOMPLETE_FIXTURE_ID = "incomplete_fixture_1"
 SERVING_MODEL = "deepseek/deepseek-v4-flash-0731"
 CATALOG_JUMP_MODEL = "deepseek/deepseek-v4-pro-0813"
-I_CATALOG_NOTE = (
-    "I_catalog is a gated catalog rebind of f_θ (catalog swap, not post-training). "
-    "Serving stays on deepseek/deepseek-v4-flash-0731 until gate=mount rebinds "
+I_SKU_NOTE = (
+    "I_sku is a gated catalog rebind of the serving SKU, not I_weight-as-trainer. "
+    "Base SKU deepseek/deepseek-v4-flash-0731 until gate=mount rebinds "
     "n.model / provider to deepseek/deepseek-v4-pro-0813 (OpenRouter, GA 2026-08-12). "
-    "servingPaused stays false. FakeTrainer, surrogate-prefix, and LoRA are not jumps."
+    "Jump iff later serving model id is 0813. servingPaused stays false. "
+    "Not fine-tuning. FakeTrainer and LoRA are not this arm."
 )
+I_CATALOG_NOTE = I_SKU_NOTE
 I_WEIGHT_NOTE = (
-    "I_weight TrainJob is a protocol stub, not the paper slow arm and not post-training. "
-    "The official incomplete arm is I_catalog (catalog-rebind to pro-0813). "
-    + I_CATALOG_NOTE
+    "I_weight TrainJob is a protocol stub, not the paper slow arm and not fine-tuning. "
+    "The official incomplete arm is I_sku (catalog rebind to pro-0813). "
+    + I_SKU_NOTE
 )
 
 
@@ -297,7 +299,7 @@ def run_slice(
 
 
 def apply_scope_from_obs(obs_list: list[dict[str, Any]]) -> dict[str, list[str]]:
-    """Wait+hit keep C0; completed I_loop miss get C1; incomplete / I_catalog keep C0."""
+    """Wait+hit keep C0; completed I_loop miss get C1; incomplete / I_sku keep C0."""
     hits: set[str] = set()
     incompletes: set[str] = set()
     order: list[str] = []
@@ -313,7 +315,7 @@ def apply_scope_from_obs(obs_list: list[dict[str, Any]]) -> dict[str, list[str]]
             hits.add(tid)
         elif arm == "I_loop":
             continue
-        elif arm in {"I_catalog", "I_weight"} or is_incomplete_obs(o):
+        elif arm in {"I_sku", "I_catalog", "I_weight"} or is_incomplete_obs(o):
             incompletes.add(tid)
     wait_kept = [tid for tid in order if tid in hits]
     weighted = [tid for tid in order if tid in incompletes]
@@ -448,7 +450,7 @@ def _sim_reward(sim: Any) -> float | None:
 
 
 def is_incomplete_episode(sim: Any) -> bool:
-    """Incomplete (hung / timeout / transfer / crash) licenses I_catalog, not a train."""
+    """Incomplete (hung / crash / no-write) licenses I_sku, not a train."""
     if bool(getattr(sim, "hung", False)):
         return True
     term = _termination(sim)
@@ -545,9 +547,9 @@ def _sidecar_catalog_jump(
     before: float,
     after: float | None = None,
 ) -> dict[str, Any]:
-    """I_catalog actuator: propose pro-0813, gate, maybe rebind. Catalog swap, not post-training."""
+    """I_sku actuator: propose pro-0813, gate, maybe rebind. Catalog rebind, not fine-tuning."""
     req: dict[str, Any] = {
-        "op": "i_catalog",
+        "op": "i_sku",
         "model": CATALOG_JUMP_MODEL,
         "before": before,
     }
@@ -559,9 +561,10 @@ def _sidecar_catalog_jump(
     jumped = bool(res.get("jumped") or catalog.get("jumped"))
     mounted = catalog.get("action") == "mount"
     return {
-        "arm": "I_catalog",
+        "arm": "I_sku",
         "kind": "catalog-rebind",
         "notPostTraining": True,
+        "notFineTuning": True,
         "trained": False,
         "proposed": CATALOG_JUMP_MODEL,
         "from": SERVING_MODEL,
@@ -574,7 +577,7 @@ def _sidecar_catalog_jump(
         "gate": res.get("gate") or {},
         "catalog": catalog,
         "graph": res.get("graph") or catalog.get("graph"),
-        "honestNote": I_CATALOG_NOTE,
+        "honestNote": I_SKU_NOTE,
         "not0731Weights": True,
         "spawned": True,
         "done": True,
@@ -590,7 +593,7 @@ def _sidecar_weight(
     trainer: str = "surrogate",
     base_model: str = "surrogate-theta",
 ) -> dict[str, Any]:
-    """I_weight TrainJob stub: spawn, poll, gate. Not I_catalog and not a θ jump."""
+    """I_weight TrainJob stub: spawn, poll, gate. Not I_sku and not a θ jump."""
     used = list(traces) if traces else incomplete_fixture_traces()
     spawned = sidecar.request(
         {
@@ -667,7 +670,7 @@ def _round_record(
     skipped: list[str] | None = None,
     reward_infos: list[dict[str, Any] | None] | None = None,
     i_weight: dict[str, Any] | None = None,
-    i_catalog: dict[str, Any] | None = None,
+    i_sku: dict[str, Any] | None = None,
     self_obs_path: str | None = None,
     self_obs: dict[str, Any] | None = None,
     apply_scope: dict[str, list[str]] | None = None,
@@ -689,8 +692,8 @@ def _round_record(
     }
     if i_weight is not None:
         rec["iWeight"] = i_weight
-    if i_catalog is not None:
-        rec["iCatalog"] = i_catalog
+    if i_sku is not None:
+        rec["iSku"] = i_sku
     if self_obs_path:
         rec["selfObsPath"] = self_obs_path
     if self_obs:
@@ -757,7 +760,7 @@ def run_improve(
     serving_paused = False
     rounds: list[dict[str, Any]] = []
     i_weight_report: dict[str, Any] | None = None
-    i_catalog_report: dict[str, Any] | None = None
+    i_sku_report: dict[str, Any] | None = None
 
     sims, pass_hat, avg, path, skipped = run_slice(
         domain=domain,
@@ -802,12 +805,12 @@ def run_improve(
         from tau2_vdom.agent import TURN_TRACES_BY_TASK
 
         slice_arm = recommend_slice_intervention(obs)
-        if slice_arm == "I_catalog":
+        if slice_arm == "I_sku":
             current = _p_hit(pass_hat)
             before = 0.0 if current is None else current
-            # Catalog swap, not post-training. Omit after → gate rejects (no invented win).
+            # Catalog rebind, not fine-tuning. Omit after → gate rejects (no invented win).
             w = _sidecar_catalog_jump(sidecar, before=before)
-            i_catalog_report = w
+            i_sku_report = w
             serving_paused = serving_paused or bool(w.get("servingPaused"))
             apply_scope = apply_scope_from_obs(obs)
             rounds.append(
@@ -818,14 +821,14 @@ def run_improve(
                     avg=avg,
                     obs=obs,
                     by_task=_rewards_by_task(sims, task_ids),
-                    intervention="I_catalog",
+                    intervention="I_sku",
                     graph_diff=[{"op": "catalog-rebind" if w.get("jumped") else "reject", "key": "solve", "note": "pro-0813"}],
                     eval_file=path,
                     skipped=skipped,
                     reward_infos=[
                         serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
                     ],
-                    i_catalog=w,
+                    i_sku=w,
                     apply_scope=apply_scope,
                 )
             )
@@ -972,7 +975,7 @@ def run_improve(
         if not _saturated(pass_hat):
             stop_reason = "budget"
 
-    if weight and i_weight_report is None and i_catalog_report is None:
+    if weight and i_weight_report is None and i_sku_report is None:
         from tau2_vdom.agent import TURN_TRACES_BY_TASK
 
         current = _p_hit(pass_hat)
@@ -1044,7 +1047,7 @@ def run_improve(
         "rounds": rounds,
         "servingPaused": serving_paused,
         "iWeight": i_weight_report,
-        "iCatalog": i_catalog_report,
+        "iSku": i_sku_report,
         "skipPolicy": SKIP_POLICY,
         "command": (
             "PYTHONPATH=python python3 -m tau2_vdom.improve"
@@ -1052,9 +1055,9 @@ def run_improve(
             + (" --weight" if weight else "")
         ),
     }
-    if i_catalog_report is not None:
-        payload["honestNote"] = I_CATALOG_NOTE
-        payload["note"] = (note + " " + I_CATALOG_NOTE).strip()
+    if i_sku_report is not None:
+        payload["honestNote"] = I_SKU_NOTE
+        payload["note"] = (note + " " + I_SKU_NOTE).strip()
     elif weight:
         payload["honestNote"] = I_WEIGHT_NOTE
         payload["note"] = (note + " " + I_WEIGHT_NOTE).strip()
@@ -1078,17 +1081,18 @@ def run_improve(
         }
         if i_weight_report
         else None,
-        "iCatalog": {
-            "arm": "I_catalog",
+        "iSku": {
+            "arm": "I_sku",
             "kind": "catalog-rebind",
             "trained": False,
-            "jumped": bool((i_catalog_report or {}).get("jumped")),
-            "mounted": bool((i_catalog_report or {}).get("mounted")),
-            "rejected": bool((i_catalog_report or {}).get("rejected")),
-            "servingPaused": bool((i_catalog_report or {}).get("servingPaused")),
-            "servingModel": (i_catalog_report or {}).get("servingModel"),
+            "notFineTuning": True,
+            "jumped": bool((i_sku_report or {}).get("jumped")),
+            "mounted": bool((i_sku_report or {}).get("mounted")),
+            "rejected": bool((i_sku_report or {}).get("rejected")),
+            "servingPaused": bool((i_sku_report or {}).get("servingPaused")),
+            "servingModel": (i_sku_report or {}).get("servingModel"),
         }
-        if i_catalog_report
+        if i_sku_report
         else None,
     }, indent=2))
     return out
@@ -1099,7 +1103,7 @@ def run_weight_fixture_improve(
     trainer: str = "surrogate",
     base_model: str = "surrogate-theta",
 ) -> Path:
-    """I_weight TrainJob stub on the deterministic incomplete fixture. Not I_catalog."""
+    """I_weight TrainJob stub on the deterministic incomplete fixture. Not I_sku."""
     from tau2_vdom.sidecar import default_sidecar
 
     sidecar = default_sidecar()
@@ -1183,7 +1187,7 @@ def run_weight_fixture_improve(
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Closed-loop τ² self-improvement: Obs → I_loop|I_catalog → Obs, "
+            "Closed-loop τ² self-improvement: Obs → I_loop|I_sku → Obs, "
             "until pass^k saturates or --max-rounds. Not the 5×4 retail 1.0."
         )
     )
@@ -1208,10 +1212,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--weight",
         action="store_true",
         help=(
-            "On I_catalog (incomplete episode), propose catalog-rebind to "
-            "deepseek/deepseek-v4-pro-0813 and gate it. Catalog swap, not "
-            "post-training. Serving is never paused. --weight-fixture is the "
-            "I_weight TrainJob stub, not this arm."
+            "On I_sku (hung / crash / no-write), propose catalog rebind to "
+            "deepseek/deepseek-v4-pro-0813 and gate it. Not I_weight-as-trainer "
+            "and not fine-tuning. Serving is never paused. --weight-fixture is "
+            "the I_weight TrainJob stub, not this arm."
         ),
     )
     p.add_argument(
@@ -1219,7 +1223,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Run only the I_weight TrainJob stub on the deterministic incomplete "
-            "fixture (no tau2 slice, no API key). Not I_catalog and not a θ jump."
+            "fixture (no tau2 slice, no API key). Not I_sku and not a θ jump."
         ),
     )
     return p

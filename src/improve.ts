@@ -36,9 +36,9 @@ export type ImproveIter = {
  * the eval gate before the live graph changes.
  *
  * Adapter / TrainJob is a protocol stub, not the paper slow arm.
- * The τ² incomplete actuator is I_catalog: gated catalog rebind → 0813
- * (catalog swap, not post-training). servingPaused is never set.
- * FakeTrainer / surrogate-prefix / LoRA are not catalog jumps.
+ * The τ² incomplete actuator is I_sku: gated catalog rebind → 0813
+ * (catalog rebind, not I_weight-as-trainer, not fine-tuning).
+ * servingPaused is never set. FakeTrainer / LoRA are not catalog jumps.
  */
 export async function improveLoop(opts: {
   task: Task;
@@ -184,7 +184,7 @@ export async function improveLoop(opts: {
   return history;
 }
 
-/** Incomplete traces license adapter / I_catalog. Does not rewrite the iter ladder. */
+/** Incomplete traces license adapter / I_sku. Does not rewrite the iter ladder. */
 export function tracesLookIncomplete(traces: Trace[]): boolean {
   return traces.some((t) => {
     const extra = t as Trace & { hung?: boolean; reason?: string; termination?: string };
@@ -200,7 +200,7 @@ export function tracesLookIncomplete(traces: Trace[]): boolean {
 
 /**
  * Explicit modes stay as requested. auto is capability → adapter → topology
- * by iter index, unless traces look incomplete — then adapter / I_catalog.
+ * by iter index, unless traces look incomplete — then adapter / I_sku.
  */
 export function pickMode(mode: ImproveMode, iter: number, traces: Trace[] = []): ImproveMode {
   if (mode !== "auto") return mode;

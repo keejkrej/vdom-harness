@@ -3,9 +3,9 @@
  * Logs go to stderr so stdout stays machine-readable.
  *
  * Fast clock: set_technique / i_loop / turn keep answering.
- * I_catalog (i_catalog) is the slow arm: propose pro-0813, gate, rebind n.model
- * (catalog swap, not post-training). servingPaused is always false.
- * FakeTrainer / i_weight_* are protocol stubs — not jumps and not this arm.
+ * I_sku (i_sku) is the slow arm: propose pro-0813, gate, rebind n.model
+ * (catalog rebind, not I_weight-as-trainer, not fine-tuning).
+ * servingPaused is always false. FakeTrainer / i_weight_* are stubs.
  */
 import { createProvider, DeterministicProvider, resolveProvider, type Message, type ToolSpec } from "../providers.js";
 import { filterGymToolCalls, runTau2Turn } from "./tau2-turn.js";
@@ -30,7 +30,7 @@ import {
 } from "../trainer.js";
 import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
-import { applyICatalog, servingModelOfGraph } from "./tau2-weight.js";
+import { applyISku, servingModelOfGraph } from "./tau2-weight.js";
 import { runSelfObs } from "./tau2-self-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { createInterface } from "node:readline";
@@ -66,7 +66,7 @@ type SidecarReply = Tau2TurnResponse & {
   servingPaused?: boolean;
   spawned?: boolean;
   done?: boolean;
-  gate?: ReturnType<typeof gateWeightMount> | { arm: "I_catalog"; action: "mount" | "reject"; before: number; after: number; reason: string };
+  gate?: ReturnType<typeof gateWeightMount> | { arm: "I_sku"; action: "mount" | "reject"; before: number; after: number; reason: string };
   job?: TrainJob;
   path?: "self" | "fallback";
   action?: "wait" | "I_loop";
@@ -77,7 +77,7 @@ type SidecarReply = Tau2TurnResponse & {
   jumped?: boolean;
   servingModel?: string;
   trained?: false;
-  catalog?: ReturnType<typeof applyICatalog>;
+  catalog?: ReturnType<typeof applyISku>;
 };
 
 function providerFor(model?: string): ReturnType<typeof createProvider> {
@@ -217,10 +217,10 @@ async function handle(line: string): Promise<void> {
     return;
   }
 
-  if (req.op === "i_catalog" || req.op === "i_weight_catalog") {
+  if (req.op === "i_sku" || req.op === "i_catalog" || req.op === "i_weight_catalog") {
     const before = Number(req.before ?? 0);
     const after = req.after !== undefined && req.after !== null ? Number(req.after) : before;
-    const catalog = applyICatalog({
+    const catalog = applyISku({
       graph: req.graph ?? currentGraph,
       before,
       after,
@@ -238,7 +238,7 @@ async function handle(line: string): Promise<void> {
       catalog,
       trained: false,
       gate: {
-        arm: "I_catalog",
+        arm: "I_sku",
         action: catalog.action,
         before: catalog.before,
         after: catalog.after,

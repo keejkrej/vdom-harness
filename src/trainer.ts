@@ -37,8 +37,9 @@ export type Trainer = {
 
 /**
  * TrainJob / FakeTrainer protocol stub — not the paper slow arm.
- * The official incomplete arm is I_catalog: gated catalog rebind to
- * deepseek/deepseek-v4-pro-0813 (catalog swap, not post-training).
+ * The official incomplete arm is I_sku: gated catalog rebind from
+ * deepseek/deepseek-v4-flash-0731 to deepseek/deepseek-v4-pro-0813.
+ * Catalog rebind, not I_weight-as-trainer, not fine-tuning.
  * FakeTrainer and SurrogateTrainer are not catalog jumps, not LoRA wins,
  * and must not be logged as 44 trained or as a θ jump.
  * servingPaused is always false.
