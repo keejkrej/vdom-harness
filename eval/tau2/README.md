@@ -4,7 +4,7 @@ Official scores come from measured rewards and the Yao et al. `pass^k` estimator
 
 ## The claim is a closed loop
 
-self-observe → `I_loop` or `I_weight` → run the same tasks → self-observe again, until `pass^k` saturates or a round budget. The serving agent may `get_agent_graph` / `set_agent_graph` mid-turn (local intercept; never a gym tool). Host I_loop is fallback if it never called set. Serving does not pause. Not a single before/after.
+self-observe → `I_loop` or `I_catalog` → run the same tasks → self-observe again, until `pass^k` saturates or a round budget. The serving agent may `get_agent_graph` / `set_agent_graph` mid-turn (local intercept; never a gym tool). Host I_loop is fallback if it never called set. Serving does not pause. Not a single before/after. `I_catalog` is a gated catalog rebind to `deepseek/deepseek-v4-pro-0813` (catalog swap, not post-training). θ jumped only if later serving model id is 0813.
 
 The 5×4 retail one-shot on tasks 0–4 scored `pass^k=1.0`. That slice is **saturated** — it cannot show improvement. Do not lead with it. The figure is `python -m tau2_vdom.improve`.
 
@@ -21,7 +21,7 @@ PYTHONPATH=python python3 -m tau2_vdom.improve
 # or: npm run eval:tau2:improve
 ```
 
-Writes `eval/tau2/latest-improve.json`: `rounds[]` with `pHit`, `passHatK`, `taskPHit`, `obs`, `intervention`, `graphDiff` per round. `--max-rounds` is the improve budget (default 4). `--weight` runs the slow-clock `TrainJob` after I_loop (incomplete traces or the deterministic fixture). I_weight is the slow clock for incomplete episodes; 0731 is API-frozen so the mount is a surrogate or a reject, never a fake LoRA. Serving does not pause.
+Writes `eval/tau2/latest-improve.json`: `rounds[]` with `pHit`, `passHatK`, `taskPHit`, `obs`, `intervention`, `graphDiff` per round. `--max-rounds` is the improve budget (default 4). Incomplete / hung episodes fire `I_catalog` (propose pro-0813, gate, rebind `n.model` / provider; catalog swap, not post-training). `--weight-fixture` is the `I_weight` TrainJob stub — not a catalog jump and not a θ win. Serving does not pause.
 
 Measured (deterministic, no key, official tau2 evaluator):
 
@@ -52,6 +52,8 @@ Finished: 2026-08-19 14:11 CEST. Compact: `improve-live-0731.json`.
 | 2 | validator | 0.333 | 0 | 1 | 0 | I_loop | mount validator |
 
 `stopReason: loop-exhausted`. `servingPaused: false`. I_loop did **not** raise p_hit vs naive one-shot. Round-1 0.0 is a smaller denominator (task 41 skipped). Tasks 39 and 44 stayed 0.0. Not invented.
+
+Official post-gate 39/44 log (replay falsifier, not a live 0813 vs 0731 table): 39 is `I_loop`; 44 hung/timeout is `I_catalog` / catalog-rebind (catalog swap, not post-training); `waitKept=[]`. 44 did not train.
 
 Airline `reward_basis` is DB × COMMUNICATE (`communicate_info` is `[]` on 39/44), so score 0 is a DB miss. ACTION / `nl_assertions` are diagnostics only.
 

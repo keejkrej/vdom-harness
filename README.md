@@ -60,7 +60,7 @@ Without a key, the deterministic provider stays active.
 
 ## Evaluation
 
-The result this repo claims is a **closed loop**: self-observe → `I_loop` or `I_weight` → run again → self-observe, until `pass^k` saturates or a round budget. The serving agent sees kernel C and may `get_agent_graph` / `set_agent_graph` mid-turn (intercepted locally; never forwarded to the τ² gym); host I_loop is fallback if it never called set. The canned airline checklist is fallback when self-Obs JSON is invalid. Not a static one-shot τ² score and not a single before/after. Serving does not pause. The 5×4 retail one-shot slice on tasks 0–4 scored `pass^k=1.0` — that slice is saturated and cannot show improvement; do not lead with it.
+The result this repo claims is a **closed loop**: self-observe → `I_loop` or `I_catalog` → run again → self-observe, until `pass^k` saturates or a round budget. The serving agent sees kernel C and may `get_agent_graph` / `set_agent_graph` mid-turn (intercepted locally; never forwarded to the τ² gym); host I_loop is fallback if it never called set. The canned airline checklist is fallback when self-Obs JSON is invalid. Not a static one-shot τ² score and not a single before/after. Serving does not pause. The 5×4 retail one-shot slice on tasks 0–4 scored `pass^k=1.0` — that slice is saturated and cannot show improvement; do not lead with it.
 
 Toys in `src/benchmarks.ts` (word-reverse, and friends) are **unit fixtures**. They prove the reconciler and DeterministicProvider, not the agent. The paper that accompanies this runtime is [agent-stochastic-dynamics](https://github.com/keejkrej/agent-stochastic-dynamics). This repo is the submitted runtime.
 
@@ -80,8 +80,9 @@ npm run eval:tau2:smoke
 PYTHONPATH=python python3 -m tau2_vdom.improve
 npm run eval:tau2:improve
 
-# I_weight slow clock (no key): after I_loop, spawn a TrainJob from incomplete
-# traces (or the deterministic fixture). Serving is never paused.
+# I_catalog slow arm (no key): hung / incomplete proposes catalog-rebind
+# to deepseek/deepseek-v4-pro-0813 (catalog swap, not post-training).
+# --weight-fixture is the I_weight TrainJob stub, not a θ jump.
 PYTHONPATH=python python3 -m tau2_vdom.improve --weight
 PYTHONPATH=python python3 -m tau2_vdom.improve --weight --weight-fixture
 ```
@@ -120,7 +121,7 @@ Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
 
 1. **Harness (capability)** — propose a `kind: "capability"` node with a `source` ref → sandbox validation → eval (`runBenchmark`) → mount on success. Raw scientist JSON is never executed; only `module:<id>` refs (or exact fingerprints) against a pre-approved capability registry pass the sandbox. Failed eval leaves the live graph unchanged.
 
-2. **Weights (adapter)** — an injectable `Trainer` runs out-of-process (tests use `FakeTrainer`) and returns an `AdapterArtifact`. A `kind: "adapter"` node carries `adapterRef` / `modelRef`; on a passing gate the target agent's `model` pointer updates (same binding as AgentNode.model → PhysicalNode.provider). Failed eval rejects the candidate; a later regression can `rollbackAdapter` (unmount + restore previous model). I_weight is the slow clock for incomplete episodes; 0731 is API-frozen so the mount is a surrogate or a reject, never a fake LoRA.
+2. **Weights (adapter)** — an injectable `Trainer` runs out-of-process (tests use `FakeTrainer`) and returns an `AdapterArtifact`. A `kind: "adapter"` node carries `adapterRef` / `modelRef`; on a passing gate the target agent's `model` pointer updates (same binding as AgentNode.model → PhysicalNode.provider). Failed eval rejects the candidate; a later regression can `rollbackAdapter` (unmount + restore previous model). FakeTrainer is a protocol stub, not the paper slow arm. Official incomplete arm is `I_catalog`: gated catalog-rebind to `deepseek/deepseek-v4-pro-0813` (catalog swap, not post-training). Never a fake LoRA.
 
 `improveLoop` chooses topology, capability, or adapter (or `auto`). Real LoRA / Hugging Face Jobs stay behind the `Trainer` port — see `describeHfJobsExtension` in `src/trainer.ts`. No in-process GPU training.
 
@@ -132,7 +133,7 @@ Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
 - src/runtime.ts -- walk the mounted graph, collect traces
 - src/papers.ts -- source text to graph (`compilePaper` / `compileSource`)
 - src/benchmarks.ts -- word-reverse fixtures (not the paper eval)
-- src/eval/ -- τ² turn loop, sidecar, Obs, I_loop / I_weight gate
+- src/eval/ -- τ² turn loop, sidecar, Obs, I_loop / I_catalog catalog-rebind
 - python/tau2_vdom/ -- official HalfDuplexAgent + runner + `python -m tau2_vdom.improve`
 - src/scientist.ts -- evolve the graph from traces
 - src/capability.ts -- approved capability registry + sandbox gate
@@ -150,4 +151,4 @@ package.json defines demo, test, build, export, and viz. After installing packag
     npm i && npm test && npm run demo
     npm run eval:tau2:smoke     # official τ² mock create_task_1, no API key
     npm run eval:tau2:improve   # naive → Obs → I_loop → same tasks (update_task_1)
-    npm run eval:tau2:improve:weight  # I_loop then I_weight TrainJob (surrogate or reject)
+    npm run eval:tau2:improve:weight  # I_catalog catalog-rebind; --weight-fixture is TrainJob stub

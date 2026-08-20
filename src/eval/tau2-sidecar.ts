@@ -2,9 +2,10 @@
  * Stdio JSONL sidecar. Python HalfDuplexAgent sends one turn per line.
  * Logs go to stderr so stdout stays machine-readable.
  *
- * Two-clock I_weight: set_technique / i_loop / turn keep answering (fast clock).
- * i_weight_catalog is the actuator: propose pro-0813, gate, rebind n.model.
- * servingPaused is always false. FakeTrainer / surrogate-prefix are not jumps.
+ * Fast clock: set_technique / i_loop / turn keep answering.
+ * I_catalog (i_catalog) is the slow arm: propose pro-0813, gate, rebind n.model
+ * (catalog swap, not post-training). servingPaused is always false.
+ * FakeTrainer / i_weight_* are protocol stubs — not jumps and not this arm.
  */
 import { createProvider, DeterministicProvider, resolveProvider, type Message, type ToolSpec } from "../providers.js";
 import { filterGymToolCalls, runTau2Turn } from "./tau2-turn.js";
@@ -29,7 +30,7 @@ import {
 } from "../trainer.js";
 import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
-import { applyIWeightCatalog, servingModelOfGraph } from "./tau2-weight.js";
+import { applyICatalog, servingModelOfGraph } from "./tau2-weight.js";
 import { runSelfObs } from "./tau2-self-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { createInterface } from "node:readline";
@@ -75,7 +76,7 @@ type SidecarReply = Tau2TurnResponse & {
   applyScope?: ApplyScope;
   jumped?: boolean;
   servingModel?: string;
-  catalog?: ReturnType<typeof applyIWeightCatalog>;
+  catalog?: ReturnType<typeof applyICatalog>;
 };
 
 function providerFor(model?: string): ReturnType<typeof createProvider> {
@@ -215,10 +216,10 @@ async function handle(line: string): Promise<void> {
     return;
   }
 
-  if (req.op === "i_weight_catalog") {
+  if (req.op === "i_catalog" || req.op === "i_weight_catalog") {
     const before = Number(req.before ?? 0);
     const after = req.after !== undefined && req.after !== null ? Number(req.after) : before;
-    const catalog = applyIWeightCatalog({
+    const catalog = applyICatalog({
       graph: req.graph ?? currentGraph,
       before,
       after,
@@ -234,8 +235,9 @@ async function handle(line: string): Promise<void> {
       jumped: catalog.jumped,
       servingModel: catalog.servingModelId,
       catalog,
+      trained: false,
       gate: {
-        arm: "I_weight",
+        arm: "I_catalog",
         action: catalog.action,
         before: catalog.before,
         after: catalog.after,

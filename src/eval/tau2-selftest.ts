@@ -32,7 +32,7 @@ import { GOLD_RESERVATION_IDS, hasGoldReservationId, serializeKernelC } from "./
 import { formatSelfObsUser, runSelfObs, SELF_OBS_SYSTEM, SELF_OBS_WAIT_HIT_RULES } from "./tau2-self-obs.js";
 import { type Tau2Obs } from "./tau2-types.js";
 import {
-  applyIWeightCatalog,
+  applyICatalog,
   CATALOG_JUMP_MODEL,
   CATALOG_JUMP_NOTE,
   proposeCatalogJump,
@@ -346,7 +346,7 @@ async function testILoopAndWeightGate(): Promise<void> {
     [{ nSteps: 1, nSuccessProxy: 0, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 }],
     { loopExhausted: true },
   );
-  assertEq(sliceWeight, "I_weight", "exhausted loop + miss → I_weight");
+  assertEq(sliceWeight, "I_catalog", "exhausted loop + miss → I_catalog");
 }
 
 async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
@@ -381,7 +381,7 @@ async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
   assertEq(obs.refusedCancel, true, "refusedCancel from assistant text");
   assertEq(obs.inventedPolicy, true, "inventedPolicy from no-show / no way");
   assertEq(obs.techniqueRecommendation, "policy-checklist", "arm recommends policy technique");
-  assertEq(obs.arm, "I_loop", "typed miss is still I_loop, not I_weight");
+  assertEq(obs.arm, "I_loop", "typed miss is still I_loop, not I_catalog");
   assert(obs.critique.includes("policy-checklist"), "critique names policy-checklist");
   assertEq(shouldRecommendPolicy(obs), true, "shouldRecommendPolicy on cancel miss");
   assertEq(obsNeedsPolicy(obs), true, "obsNeedsPolicy true");
@@ -407,7 +407,7 @@ async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
   });
   assertEq(hung.hung, true, "hung feature");
   assertEq(hung.nSuccessProxy, 0, "hung is not a hit");
-  assertEq(hung.arm, "I_weight", "hung licenses I_weight, not I_loop");
+  assertEq(hung.arm, "I_catalog", "hung licenses I_catalog, not I_loop");
   assert(hung.critique.includes("null reward"), "hung critique keeps the task in the set");
   assertEq(isIncompleteEpisode(hung), true, "hung is incomplete");
 
@@ -1019,7 +1019,7 @@ function hungObs(taskId: string): Tau2Obs {
     critique: "trial hung or skipped; keep task in the set (null reward), retry once",
     toolFailures: 0,
     repeatActions: 0,
-    arm: "I_weight",
+    arm: "I_catalog",
     hung: true,
     termination: "timeout",
   };
@@ -1036,7 +1036,7 @@ async function testTypedInterventionArms(): Promise<void> {
     repeatActions: 0,
     hung: true,
   });
-  assertEq(hung, "I_weight", "hung ⇒ I_weight");
+  assertEq(hung, "I_catalog", "hung ⇒ I_catalog");
 
   const timeout = recommendIntervention({
     nSteps: 0,
@@ -1049,7 +1049,7 @@ async function testTypedInterventionArms(): Promise<void> {
     hung: false,
     termination: "timeout",
   });
-  assertEq(timeout, "I_weight", "timeout ⇒ I_weight");
+  assertEq(timeout, "I_catalog", "timeout ⇒ I_catalog");
 
   const noWrite = recommendIntervention({
     nSteps: 0,
@@ -1061,7 +1061,7 @@ async function testTypedInterventionArms(): Promise<void> {
     repeatActions: 0,
     hung: false,
   });
-  assertEq(noWrite, "I_weight", "no-write miss ⇒ I_weight");
+  assertEq(noWrite, "I_catalog", "no-write miss ⇒ I_catalog");
 
   const completedEmpty = recommendIntervention({
     nSteps: 0,
@@ -1116,7 +1116,7 @@ async function testTypedInterventionArms(): Promise<void> {
   assertEq(extraWrite, "I_loop", "completed extra-write attractor ⇒ I_loop");
 
   const sliceHung = recommendSliceIntervention([waitHitObs("44"), hungObs("41")]);
-  assertEq(sliceHung, "I_weight", "any incomplete episode ⇒ slice I_weight, not I_loop");
+  assertEq(sliceHung, "I_catalog", "any incomplete episode ⇒ slice I_catalog, not I_loop");
 
   const slicePolicy = recommendSliceIntervention([waitHitObs("44"), missCancelObs("39")]);
   assertEq(slicePolicy, "I_loop", "completed policy miss in mixed slice still I_loop");
@@ -1128,7 +1128,7 @@ async function testTypedInterventionArms(): Promise<void> {
   const waitGraph = graphForScopedTask(tau2Graph("one-shot"), tau2Graph("self-refine"), scope, "41");
   assert(!graphHas(waitGraph, "critic"), "weighted / incomplete keeps C0");
   const hungPrompt = formatSelfObsUser({ graph: tau2Graph("one-shot"), obs: [hungObs("41")] });
-  assert(hungPrompt.includes("arm=I_weight"), "prompt lists I_weight for hung");
+  assert(hungPrompt.includes("arm=I_catalog"), "prompt lists I_catalog for hung");
   assert(!hasGoldReservationId(hungPrompt), "hung prompt has no gold reservation IDs");
   const hungLoop = applyILoop(tau2Graph("one-shot"), hungObs("41"));
   assertEq(hungLoop.applied, false, "I_loop does not apply to hung-only");
@@ -1178,18 +1178,19 @@ async function testPostGate3944Replay(): Promise<void> {
   assertEq(obs44.nSuccessProxy, 0, "44 hung is not a hit");
   assertEq(obs44.nSteps, 0, "44 nmsg 0");
   assertEq(obs44.lastActions.length, 0, "44 no writes / no messages");
-  assertEq(obs44.arm, "I_weight", "44 hung/timeout → I_weight");
+  assertEq(obs44.arm, "I_catalog", "44 hung/timeout → I_catalog (slow arm), not trained");
   assertEq(
     recommendIntervention(obs44, { loopExhausted: false }),
-    "I_weight",
-    "hung 44 is I_weight even when loopExhausted is false",
+    "I_catalog",
+    "hung 44 is I_catalog even when loopExhausted is false",
   );
   assertEq(
     recommendIntervention(obs44, { loopExhausted: true }),
-    "I_weight",
-    "hung 44 is still I_weight when the loop is exhausted",
+    "I_catalog",
+    "hung 44 is still I_catalog when the loop is exhausted",
   );
-  const oldRule44: "wait" | "I_loop" | "I_weight" =
+  assert(obs44.arm !== "I_weight", "44 log is catalog-rebind / I_catalog, not I_weight-as-trainer");
+  const oldRule44: "wait" | "I_loop" | "I_weight" | "I_catalog" =
     obs44.nSuccessProxy === 1 ? "wait" : "I_loop";
   assertEq(oldRule44, "I_loop", "sanity: pre-thesis rule I_loop-until-exhausted would pick I_loop for 44");
   assert(
@@ -1203,24 +1204,35 @@ async function testPostGate3944Replay(): Promise<void> {
   assertEq(scope.weighted.join(","), "44", "44 is weighted / incomplete");
   assertEq(
     recommendSliceIntervention([obs39, obs44], { loopExhausted: false }),
-    "I_weight",
-    "slice prefers I_weight because 44 is hung, not I_loop-until-exhausted",
+    "I_catalog",
+    "slice prefers I_catalog because 44 is hung, not I_loop-until-exhausted",
   );
+
+  const slow = proposeCatalogJump();
+  assertEq(slow.arm, "I_catalog", "slow-arm proposal is I_catalog");
+  assertEq(slow.kind, "catalog-rebind", "44 log is catalog-rebind, not a train");
+  assertEq(slow.model, CATALOG_JUMP_MODEL, "slow arm proposes pro-0813");
+  assertEq(slow.trained, false, "44 did not train");
+  assertEq(slow.servingPaused, false, "catalog-rebind never pauses serve");
+  assert(CATALOG_JUMP_NOTE.includes("catalog swap, not post-training"), "honest catalog-swap label");
 
   const prompt = formatSelfObsUser({ graph: tau2Graph("one-shot"), obs: [obs39, obs44] });
   assert(prompt.includes("taskId=39"), "replay prompt lists 39");
   assert(prompt.includes("taskId=44"), "replay prompt lists 44");
   assert(prompt.includes("arm=I_loop"), "replay prompt lists I_loop");
-  assert(prompt.includes("arm=I_weight"), "replay prompt lists I_weight");
+  assert(prompt.includes("arm=I_catalog"), "replay prompt lists I_catalog");
+  assert(!prompt.includes("arm=I_weight"), "replay prompt does not claim 44 trained via I_weight");
   assert(!hasGoldReservationId(prompt), "replay prompt has no gold reservation IDs");
 }
 
 async function testCatalogJumpMounts0813(): Promise<void> {
   const proposal = proposeCatalogJump();
-  assertEq(proposal.kind, "catalog-swap", "I_weight proposes a catalog swap, not a LoRA");
+  assertEq(proposal.arm, "I_catalog", "slow arm is I_catalog, not I_weight-as-trainer");
+  assertEq(proposal.kind, "catalog-rebind", "I_catalog proposes a catalog-rebind, not a LoRA");
   assertEq(proposal.model, CATALOG_JUMP_MODEL, "proposal model is pro-0813");
+  assertEq(proposal.trained, false, "catalog-rebind is not a train");
   assertEq(proposal.servingPaused, false, "proposal never pauses serve");
-  assert(CATALOG_JUMP_NOTE.includes("not post-training"), "honest catalog-swap label");
+  assert(CATALOG_JUMP_NOTE.includes("catalog swap, not post-training"), "honest catalog-swap label");
 
   const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
   const mock0731 = new DeterministicProvider(SERVING_MODEL);
@@ -1233,7 +1245,7 @@ async function testCatalogJumpMounts0813(): Promise<void> {
   assertEq(servingModelOfGraph(start), SERVING_MODEL, "pre-gate serving is 0731");
   assertEq(dom.current.get("solve")?.provider?.model, SERVING_MODEL, "PhysicalNode bound to 0731");
 
-  const reject = applyIWeightCatalog({
+  const reject = applyICatalog({
     graph: start,
     before: 1,
     after: 0,
@@ -1241,12 +1253,16 @@ async function testCatalogJumpMounts0813(): Promise<void> {
     dom,
   });
   assertEq(reject.action, "reject", "rejected gate is a negative");
+  assertEq(reject.arm, "I_catalog", "reject is still the I_catalog arm");
+  assertEq(reject.kind, "catalog-rebind", "reject log is catalog-rebind");
+  assertEq(reject.trained, false, "reject did not train");
+  assertEq(reject.servingPaused, false, "reject never pauses serve");
   assertEq(reject.jumped, false, "reject is not a jump");
   assertEq(thetaJumped(reject), false, "thetaJumped false on reject");
   assertEq(servingModelOfGraph(reject.graph), SERVING_MODEL, "reject keeps 0731");
   assertEq(findNode(reject.graph, "solve")?.model, SERVING_MODEL, "reject n.model stays 0731");
 
-  const mount = applyIWeightCatalog({
+  const mount = applyICatalog({
     graph: start,
     before: 0,
     after: 1,
@@ -1254,6 +1270,10 @@ async function testCatalogJumpMounts0813(): Promise<void> {
     dom,
   });
   assertEq(mount.action, "mount", "gate=mount");
+  assertEq(mount.arm, "I_catalog", "mount is I_catalog, not I_weight-as-trainer");
+  assertEq(mount.kind, "catalog-rebind", "mount log is catalog-rebind");
+  assertEq(mount.trained, false, "catalog-rebind is not a train");
+  assertEq(mount.servingPaused, false, "mount never pauses serve");
   assertEq(mount.jumped, true, "mount is a catalog jump");
   assertEq(thetaJumped(mount), true, "θ jumped only on mount + 0813");
   assertEq(servingModelOfGraph(mount.graph), CATALOG_JUMP_MODEL, "post-mount serving model id is 0813");
@@ -1300,9 +1320,9 @@ async function main(): Promise<void> {
     ["all-miss valid self I_loop still applies", testAllMissSelfILoopStillApplies],
     ["host applyILoop fallback uses the wait-hit gate", testApplyILoopFallbackWaitHitGate],
     ["self-Obs prompt has per-episode arms and no gold IDs", testSelfObsPromptHasEpisodesNoGoldIds],
-    ["typed arms: hung I_weight / hit wait / policy I_loop", testTypedInterventionArms],
-    ["post-gate 39/44 replay: 39 I_loop, hung 44 I_weight, waitKept=[]", testPostGate3944Replay],
-    ["I_weight catalog jump mounts 0813 (mocked bind, not LoRA)", testCatalogJumpMounts0813],
+    ["typed arms: hung I_catalog / hit wait / policy I_loop", testTypedInterventionArms],
+    ["post-gate 39/44 replay: 39 I_loop, hung 44 I_catalog, waitKept=[]", testPostGate3944Replay],
+    ["I_catalog catalog-rebind mounts 0813 (mocked bind, not LoRA)", testCatalogJumpMounts0813],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

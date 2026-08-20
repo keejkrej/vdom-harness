@@ -73,8 +73,8 @@ export type Tau2Obs = {
   critique: string;
   toolFailures: number;
   repeatActions: number;
-  /** Paper arm Obs should emit: I_loop | I_weight | wait */
-  arm?: "I_loop" | "I_weight" | "wait";
+  /** Paper arm Obs should emit: I_loop | I_catalog | wait. I_weight is a legacy trainer-stub alias. */
+  arm?: "I_loop" | "I_catalog" | "I_weight" | "wait";
   /** Official task id. Required for per-task C on mixed wait-hit / miss batches. */
   taskId?: string;
   missedActions?: Tau2MissedAction[];
@@ -89,7 +89,7 @@ export type Tau2Obs = {
 
 /**
  * Mixed-batch split:
- * wait+hit keep C0; completed I_loop miss get C1; incomplete / I_weight keep C0.
+ * wait+hit keep C0; completed I_loop miss get C1; incomplete / I_catalog keep C0.
  */
 export type ApplyScope = {
   waitKept: string[];

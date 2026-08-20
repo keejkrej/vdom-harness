@@ -97,9 +97,9 @@ def test_obs_hung_keeps_task() -> None:
     obs = _obs([], None, [], hung=True)
     assert obs["hung"] is True
     assert obs["nSuccessProxy"] == 0
-    assert obs["arm"] == "I_weight"
+    assert obs["arm"] == "I_catalog"
     assert "null reward" in obs["critique"]
-    assert recommend_intervention(obs) == "I_weight"
+    assert recommend_intervention(obs) == "I_catalog"
 
 
 def test_skipped_task_stays_in_task_phit() -> None:
@@ -223,7 +223,7 @@ def test_collect_obs_sets_task_id() -> None:
 
 def test_typed_arms_hung_hit_policy() -> None:
     hung = _obs([], None, [], hung=True)
-    assert hung["arm"] == "I_weight"
+    assert hung["arm"] == "I_catalog"
     hit = _obs(
         [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
         1.0,
@@ -259,7 +259,7 @@ def test_typed_arms_hung_hit_policy() -> None:
     assert extra["arm"] == "I_loop"
     assert extra["lastActions"] == ["cancel_reservation"]
     assert "MSJ4OA" not in str(extra)
-    assert recommend_slice_intervention([hit, hung]) == "I_weight"
+    assert recommend_slice_intervention([hit, hung]) == "I_catalog"
     assert recommend_slice_intervention([hit, policy]) == "I_loop"
     scope = apply_scope_from_obs(
         [
@@ -302,9 +302,10 @@ def test_post_gate_39_44_obs_batch() -> None:
     assert obs44["nSuccessProxy"] == 0
     assert obs44["nSteps"] == 0
     assert obs44["lastActions"] == []
-    assert obs44["arm"] == "I_weight"
-    assert recommend_intervention(obs44, loop_exhausted=False) == "I_weight"
-    assert recommend_intervention(obs44, loop_exhausted=True) == "I_weight"
+    assert obs44["arm"] == "I_catalog"
+    assert recommend_intervention(obs44, loop_exhausted=False) == "I_catalog"
+    assert recommend_intervention(obs44, loop_exhausted=True) == "I_catalog"
+    assert obs44["arm"] != "I_weight"
     old_rule_44 = "wait" if obs44["nSuccessProxy"] == 1 else "I_loop"
     assert old_rule_44 == "I_loop"
     assert obs44["arm"] != old_rule_44
@@ -327,17 +328,21 @@ def test_post_gate_39_44_obs_batch() -> None:
     batch = _collect_obs([sim39, HungSimulation("44", 0, "timeout")])
     assert [o["taskId"] for o in batch] == ["39", "44"]
     assert batch[0]["arm"] == "I_loop"
-    assert batch[1]["arm"] == "I_weight"
+    assert batch[1]["arm"] == "I_catalog"
     assert batch[1]["hung"] is True
     assert batch[1]["nSteps"] == 0
     scope = apply_scope_from_obs(batch)
     assert scope["waitKept"] == []
     assert scope["looped"] == ["39"]
     assert scope["weighted"] == ["44"]
-    assert recommend_slice_intervention(batch, loop_exhausted=False) == "I_weight"
+    assert recommend_slice_intervention(batch, loop_exhausted=False) == "I_catalog"
     blob = " ".join(str(o.get("lastActions")) for o in batch)
     assert "MSJ4OA" not in blob
     assert "S61CZX" not in blob
+    from tau2_vdom.improve import CATALOG_JUMP_MODEL, I_CATALOG_NOTE
+
+    assert "catalog swap, not post-training" in I_CATALOG_NOTE
+    assert CATALOG_JUMP_MODEL == "deepseek/deepseek-v4-pro-0813"
 
 
 def test_hit_still_waits() -> None:

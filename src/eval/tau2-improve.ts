@@ -11,7 +11,12 @@ import { AIRLINE_POLICY_CHECKLIST, isPolicyWriteTool, shouldRecommendPolicy } fr
 
 export type { ApplyScope } from "./tau2-types.js";
 
-export type InterventionArm = "I_loop" | "I_weight" | "wait";
+/** Official incomplete / hung arm is I_catalog (catalog-rebind). I_weight is a trainer stub only. */
+export type InterventionArm = "I_loop" | "I_catalog" | "wait";
+
+export function isCatalogArm(arm: string | undefined): boolean {
+  return arm === "I_catalog" || arm === "I_weight";
+}
 
 export const REFUSED_GLOBAL_ILOOP = "refused global I_loop: wait-hit in batch";
 
@@ -37,6 +42,7 @@ export type ILoopResult = {
   applyScope?: ApplyScope;
 };
 
+/** FakeTrainer / TrainJob eval gate. Not the paper slow arm and not a θ jump. */
 export type WeightGateDecision = {
   arm: "I_weight";
   action: "mount" | "reject";
@@ -101,7 +107,7 @@ export function episodeTaskId(obs: Tau2Obs, index: number, taskIds?: string[]): 
 }
 
 /**
- * Split a batch so a global C mutation cannot land on wait+hit or I_weight
+ * Split a batch so a global C mutation cannot land on wait+hit or I_catalog
  * (incomplete) episodes. Optional patchTaskIds scopes C1 further (wait-hit
  * and incomplete are never included).
  */
@@ -230,21 +236,22 @@ export function obsNeedsPolicy(obs?: Tau2Obs | Tau2Obs[] | null): boolean {
 
 /**
  * Per-episode arm from traces.
- * Hit → wait. Hung / timeout / transfer / crash / no-write → I_weight.
+ * Hit → wait. Hung / timeout / transfer / crash / no-write → I_catalog
+ * (gated catalog rebind; catalog swap, not post-training).
  * Completed miss with invented-policy / refused-cancel / extra-write (or
- * generic topology) attractor → I_loop. loopExhausted is a fallback to I_weight.
+ * generic topology) attractor → I_loop. loopExhausted is a fallback to I_catalog.
  */
 export function recommendIntervention(
   obs: Tau2Obs,
   opts?: { loopExhausted?: boolean },
 ): InterventionArm {
   if (obs.nSuccessProxy === 1 && !obs.hung) return "wait";
-  if (isIncompleteEpisode(obs)) return "I_weight";
-  if (opts?.loopExhausted) return "I_weight";
+  if (isIncompleteEpisode(obs)) return "I_catalog";
+  if (opts?.loopExhausted) return "I_catalog";
   return "I_loop";
 }
 
-/** Slice-level arm: I_weight if ANY episode is incomplete; wait only if every episode hit. */
+/** Slice-level arm: I_catalog if ANY episode is incomplete; wait only if every episode hit. */
 export function recommendSliceIntervention(
   obsList: Tau2Obs[],
   opts?: { loopExhausted?: boolean },
@@ -252,8 +259,8 @@ export function recommendSliceIntervention(
   if (obsList.length > 0 && obsList.every((o) => o.nSuccessProxy === 1 && !o.hung)) {
     return "wait";
   }
-  if (obsList.some((o) => isIncompleteEpisode(o))) return "I_weight";
-  if (opts?.loopExhausted) return "I_weight";
+  if (obsList.some((o) => isIncompleteEpisode(o))) return "I_catalog";
+  if (opts?.loopExhausted) return "I_catalog";
   return "I_loop";
 }
 
@@ -282,7 +289,7 @@ export function summarizeObs(obsList: Tau2Obs[]): Tau2Obs {
       hits === obsList.length && !obsList.some((o) => o.hung)
         ? "path measure hits S; wait"
         : obsList.some((o) => isIncompleteEpisode(o))
-          ? "episode incomplete (hung / timeout / no-write); I_weight"
+          ? "episode incomplete (hung / timeout / no-write); I_catalog (catalog swap, not post-training)"
           : obsNeedsPolicy(obsList)
             ? "user asked cancel/update and agent refused or never called the tool; I_loop policy-checklist"
             : toolFailures > 0
@@ -344,7 +351,7 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
     techniqueAfter = techniqueBefore;
     applied = false;
     rationale =
-      applyScope.waitKept.length > 0 ? REFUSED_GLOBAL_ILOOP : "incomplete licenses I_weight; no I_loop";
+      applyScope.waitKept.length > 0 ? REFUSED_GLOBAL_ILOOP : "incomplete licenses I_catalog; no I_loop";
   } else if (obsNeedsPolicy(obs) && !graphHas(graphBefore, "policy-checklist")) {
     graphAfter = applyPolicyChecklistMutation(graphBefore, AIRLINE_POLICY_CHECKLIST);
     techniqueAfter = "policy-checklist";
@@ -397,11 +404,10 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
 }
 
 /**
- * I_weight eval gate (slow clock). Mount only if the after-eval strictly beats
- * before. Serving keeps the old f_θ on reject (`servingPaused` stays false).
- * The real I_weight actuator is a catalog swap (see applyIWeightCatalog):
- * propose pro-0813, gate, rebind n.model. FakeTrainer / surrogate-prefix are
- * not jumps and must not be reported as a θ win.
+ * FakeTrainer / TrainJob eval gate (protocol stub). Not the paper slow arm.
+ * The official incomplete actuator is applyICatalog: propose pro-0813, gate,
+ * rebind n.model (catalog swap, not post-training). FakeTrainer / surrogate-prefix
+ * are not jumps and must not be reported as a θ win.
  */
 export function gateWeightMount(before: number, after: number): WeightGateDecision {
   if (after > before) {

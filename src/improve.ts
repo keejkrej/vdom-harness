@@ -35,10 +35,10 @@ export type ImproveIter = {
  * adapter mount based on mode / traces. All non-topology paths go through
  * the eval gate before the live graph changes.
  *
- * Adapter / I_weight uses two clocks: serving keeps old θ (fast) while the
- * slow clock requests a released checkpoint (catalog swap) or a protocol
- * stub. servingPaused is never set. FakeTrainer / surrogate-prefix are not
- * catalog jumps. The τ² I_weight actuator is applyIWeightCatalog → 0813.
+ * Adapter / TrainJob is a protocol stub, not the paper slow arm.
+ * The τ² incomplete actuator is I_catalog: gated catalog rebind → 0813
+ * (catalog swap, not post-training). servingPaused is never set.
+ * FakeTrainer / surrogate-prefix / LoRA are not catalog jumps.
  */
 export async function improveLoop(opts: {
   task: Task;
@@ -184,7 +184,7 @@ export async function improveLoop(opts: {
   return history;
 }
 
-/** Incomplete traces license adapter / I_weight. Does not rewrite the iter ladder. */
+/** Incomplete traces license adapter / I_catalog. Does not rewrite the iter ladder. */
 export function tracesLookIncomplete(traces: Trace[]): boolean {
   return traces.some((t) => {
     const extra = t as Trace & { hung?: boolean; reason?: string; termination?: string };
@@ -200,7 +200,7 @@ export function tracesLookIncomplete(traces: Trace[]): boolean {
 
 /**
  * Explicit modes stay as requested. auto is capability → adapter → topology
- * by iter index, unless traces look incomplete — then adapter / I_weight.
+ * by iter index, unless traces look incomplete — then adapter / I_catalog.
  */
 export function pickMode(mode: ImproveMode, iter: number, traces: Trace[] = []): ImproveMode {
   if (mode !== "auto") return mode;

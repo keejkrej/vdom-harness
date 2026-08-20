@@ -36,15 +36,12 @@ export type Trainer = {
 };
 
 /**
- * Two-clock I_weight:
- * - Fast clock: serving continues on old θ. `servingPaused` is always false.
- * - Slow clock: an async trainer consumes traces of incomplete episodes
- *   (transfer / hung / crash / reward 0 with early transfer).
- * - Gate: mount only if a held-out eval does not regress; else keep old θ.
- *
- * 0731 via OpenRouter cannot take an adapter. FakeTrainer and SurrogateTrainer
- * are protocol stubs — not catalog jumps and not post-training. The I_weight
- * actuator is applyIWeightCatalog (rebind to released pro-0813).
+ * TrainJob / FakeTrainer protocol stub — not the paper slow arm.
+ * The official incomplete arm is I_catalog: gated catalog rebind to
+ * deepseek/deepseek-v4-pro-0813 (catalog swap, not post-training).
+ * FakeTrainer and SurrogateTrainer are not catalog jumps, not LoRA wins,
+ * and must not be logged as 44 trained or as a θ jump.
+ * servingPaused is always false.
  */
 export type TrainJobStatus = "running" | "done" | "failed";
 export type TrainerKind = "fake" | "surrogate";
