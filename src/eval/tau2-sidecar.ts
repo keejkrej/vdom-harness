@@ -66,7 +66,7 @@ type SidecarReply = Tau2TurnResponse & {
   servingPaused?: boolean;
   spawned?: boolean;
   done?: boolean;
-  gate?: ReturnType<typeof gateWeightMount>;
+  gate?: ReturnType<typeof gateWeightMount> | { arm: "I_catalog"; action: "mount" | "reject"; before: number; after: number; reason: string };
   job?: TrainJob;
   path?: "self" | "fallback";
   action?: "wait" | "I_loop";
