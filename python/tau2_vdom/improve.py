@@ -47,6 +47,7 @@ from tau2_vdom.runner import (
     _obs,
     _pin_tau2_judges,
     is_incomplete_obs,
+    recommend_intervention,
     recommend_slice_intervention,
     serialize_reward_info,
     write_eval_file,
@@ -297,10 +298,13 @@ def apply_scope_from_obs(obs_list: list[dict[str, Any]]) -> dict[str, list[str]]
             continue
         if tid not in order:
             order.append(tid)
-        hit = o.get("arm") == "wait" and o.get("nSuccessProxy") == 1 and not o.get("hung")
+        arm = o.get("arm") or recommend_intervention(o)
+        hit = arm == "wait" and o.get("nSuccessProxy") == 1 and not o.get("hung")
         if hit:
             hits.add(tid)
-        elif is_incomplete_obs(o):
+        elif arm == "I_loop":
+            continue
+        elif arm == "I_weight" or is_incomplete_obs(o):
             incompletes.add(tid)
     wait_kept = [tid for tid in order if tid in hits]
     weighted = [tid for tid in order if tid in incompletes]

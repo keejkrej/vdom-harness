@@ -202,7 +202,13 @@ def test_collect_obs_sets_task_id() -> None:
     )
     miss = SimpleNamespace(
         task_id="39",
-        messages=[],
+        messages=[
+            SimpleNamespace(
+                role="assistant",
+                content="I cannot cancel this economy reservation; a personal reason is not covered.",
+                tool_calls=[],
+            )
+        ],
         hung=False,
         reward_info=SimpleNamespace(reward=0.0),
     )

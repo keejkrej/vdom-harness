@@ -54,7 +54,7 @@ function asObsList(obs?: Tau2Obs | Tau2Obs[] | null): Tau2Obs[] {
   return Array.isArray(obs) ? obs : [obs];
 }
 
-const INCOMPLETE_TERM = /timeout|hung|transfer|crash|error/;
+const HARD_INCOMPLETE_TERM = /timeout|hung|crash|error/;
 
 /** Env / write tool names in lastActions (text:… is not a write). */
 export function calledWriteTools(obs: Tau2Obs): boolean {
@@ -65,19 +65,23 @@ export function calledWriteTools(obs: Tau2Obs): boolean {
 export function hasLoopAttractor(obs: Tau2Obs): boolean {
   if (obs.inventedPolicy || obs.refusedCancel) return true;
   if (shouldRecommendPolicy(obs)) return true;
+  if ((obs.missedActions ?? []).length > 0) return true;
   return (obs.lastActions ?? []).some((a) => isPolicyWriteTool(a));
 }
 
 /**
- * Episode did not complete: hang, timeout, transfer, crash, or no-write
- * without a completed policy attractor.
+ * Episode did not complete: hang, timeout, crash, transfer-without-writes,
+ * or no-write without a diagnosed missed-tool / policy attractor.
  */
 export function isIncompleteEpisode(obs: Tau2Obs): boolean {
   if (obs.nSuccessProxy === 1 && !obs.hung) return false;
   if (obs.hung) return true;
   const term = (obs.termination ?? "").toLowerCase();
-  if (term && INCOMPLETE_TERM.test(term)) return true;
-  if (!calledWriteTools(obs) && !hasLoopAttractor(obs)) return true;
+  if (term && HARD_INCOMPLETE_TERM.test(term)) return true;
+  if (hasLoopAttractor(obs)) return false;
+  if (term.includes("transfer")) return true;
+  if (term.includes("user_stop")) return false;
+  if (!calledWriteTools(obs)) return true;
   return false;
 }
 

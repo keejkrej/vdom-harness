@@ -140,6 +140,10 @@ export function episodesFromInput(input: SelfObsInput): Tau2Obs[] {
       hung: false,
       taskId: input.taskIds?.[i],
     };
+    if (input.terminations?.[i]) row.termination = input.terminations[i];
+    if (!hit && (input.missedToolNames ?? []).length > 0) {
+      row.missedActions = input.missedToolNames!.map((name) => ({ name }));
+    }
     row.arm = recommendIntervention(row);
     return row;
   });

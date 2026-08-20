@@ -280,7 +280,7 @@ def serialize_reward_info(reward_info: Any) -> dict[str, Any] | None:
     }
 
 
-_INCOMPLETE_TERM = re.compile(r"timeout|hung|transfer|crash|error", re.I)
+_HARD_INCOMPLETE_TERM = re.compile(r"timeout|hung|crash|error", re.I)
 
 
 def called_write_tools(obs: dict[str, Any]) -> bool:
@@ -293,21 +293,27 @@ def has_loop_attractor(obs: dict[str, Any]) -> bool:
     if obs.get("techniqueRecommendation") == "policy-checklist":
         return True
     missed = obs.get("missedActions") or []
-    if any(isinstance(a, dict) and a.get("name") in POLICY_WRITE_TOOLS for a in missed):
+    if any(isinstance(a, dict) and a.get("name") for a in missed):
         return True
     return any(a in POLICY_WRITE_TOOLS for a in (obs.get("lastActions") or []))
 
 
 def is_incomplete_obs(obs: dict[str, Any]) -> bool:
-    """Hung / timeout / transfer / crash / no-write without a completed policy attractor."""
+    """Hung / timeout / crash / transfer-without-writes / no-write without an attractor."""
     if obs.get("nSuccessProxy") == 1 and not obs.get("hung"):
         return False
     if obs.get("hung"):
         return True
     term = str(obs.get("termination") or "").lower()
-    if term and _INCOMPLETE_TERM.search(term):
+    if term and _HARD_INCOMPLETE_TERM.search(term):
         return True
-    if not called_write_tools(obs) and not has_loop_attractor(obs):
+    if has_loop_attractor(obs):
+        return False
+    if "transfer" in term:
+        return True
+    if "user_stop" in term:
+        return False
+    if not called_write_tools(obs):
         return True
     return False
 

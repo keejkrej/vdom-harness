@@ -1050,6 +1050,19 @@ async function testTypedInterventionArms(): Promise<void> {
   });
   assertEq(noWrite, "I_weight", "no-write miss ⇒ I_weight");
 
+  const completedEmpty = recommendIntervention({
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+    termination: "user_stop",
+  });
+  assertEq(completedEmpty, "I_loop", "completed user_stop miss is I_loop even with empty lastActions");
+
   const hit = recommendIntervention({
     nSteps: 2,
     nSuccessProxy: 1,
