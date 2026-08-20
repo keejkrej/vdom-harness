@@ -12,12 +12,13 @@ import {
   type InterventionArm,
   type InterventionLicense,
 } from "./tau2-improve.js";
-import { type ApplyScope, type Tau2Obs } from "./tau2-types.js";
+import { type ApplyScope, type CatalogPointer, type Tau2Obs } from "./tau2-types.js";
 import {
   applyISku,
   CATALOG_JUMP_MODEL,
+  catalogPointer,
   proposeCatalogJump,
-  servingModelOfGraph,
+  SERVING_MODEL,
   type CatalogJumpDecision,
   type CatalogJumpProposal,
 } from "./tau2-weight.js";
@@ -26,15 +27,15 @@ import {
  * Landed controller.
  * Hung/incomplete licenses I_sku — not “pick a pricier model.”
  * Mixed batches apply BOTH buckets: slice=I_sku does not drop I_loop.
- * SKU is a sibling serving graph, not a field of isolated C0.
+ * S is a CatalogPointer beside C, not n.model and not a rebound sibling graph.
  * Gate is a measured after-eval, not “0813 exists.”
  */
 export const CONTROLLER_NOTE =
   "License is hung/incomplete, not pick a pricier model. " +
   "Mixed 39/44 applies BOTH buckets (39 I_loop C1, 44 I_sku); consuming only slice drops I_loop. " +
-  "I_sku proposes deepseek/deepseek-v4-pro-0813 and gates on a measured after-eval; " +
+  "I_sku writes S (catalog pointer beside C) to deepseek/deepseek-v4-pro-0813 after a measured after-eval; " +
   "0813 existing is not a gate. Jump iff later serving model id is 0813. " +
-  "servingPaused stays false. Catalog rebind, not fine-tuning. No LoRA.";
+  "I_loop never writes S. servingPaused stays false. Catalog rebind, not fine-tuning. No LoRA.";
 
 export type ControlledEpisode = {
   taskId?: string;
@@ -57,7 +58,12 @@ export type ControlledBatch = {
   gate?: CatalogJumpDecision;
   graphC0?: AgentGraph;
   graphC1?: AgentGraph;
+  /** C topology for the weighted bucket (C0). Not a rebound-n.model clone. */
   graphSku?: AgentGraph;
+  /** Paper S0. I_loop never writes this. */
+  serving: CatalogPointer;
+  /** S after I_sku (0813 if mounted). Weighted serving reads this, not n.model. */
+  servingSku: CatalogPointer;
   servingPaused: false;
   trained: false;
   notFineTuning: true;
@@ -93,7 +99,7 @@ export function appliedFromScope(scope: ApplyScope): InterventionArm[] {
 
 /**
  * Batch controller. Applies BOTH buckets when a graph is supplied:
- * looped → I_loop (C1); weighted → I_sku sibling graph.
+ * looped → I_loop (C1); weighted → I_sku writes S (C topology stays C0).
  * Omit after → sku reject. Fixture after=before+ε may mount.
  */
 export function controlBatch(
@@ -105,6 +111,7 @@ export function controlBatch(
     after?: number | null;
     provider?: Provider;
     dom?: RuntimeDOM;
+    serving?: CatalogPointer;
   },
 ): ControlledBatch {
   const episodes = obsList.map((o) => controlEpisode(o, opts));
@@ -112,12 +119,15 @@ export function controlBatch(
   const applyScope = computeApplyScope(obsList);
   const buckets = bucketsFromEpisodes(episodes);
   const applied = appliedFromScope(applyScope);
+  const serving = opts?.serving ?? catalogPointer(SERVING_MODEL);
   const out: ControlledBatch = {
     episodes,
     slice,
     buckets,
     applied,
     applyScope,
+    serving,
+    servingSku: serving,
     servingPaused: false,
     trained: false,
     notFineTuning: true,
@@ -127,20 +137,22 @@ export function controlBatch(
   if (opts?.graph && applyScope.looped.length > 0) {
     out.loop = applyILoop(opts.graph, obsList);
     out.graphC1 = out.loop.applied ? out.loop.graphAfter : opts.graph;
+    // I_loop mutates C only. S stays serving / servingSku.
   }
 
   if (applyScope.weighted.length > 0 || slice === "I_sku") {
-    out.proposal = proposeCatalogJump();
+    out.proposal = proposeCatalogJump(serving.sku);
     if (opts?.graph) {
-      // Sibling SKU graph. Do not write 0813 onto isolated C0 (that swallows I_sku).
       out.gate = applyISku({
         graph: opts.graph,
         before: opts.before ?? 0,
         after: opts.after,
         provider: opts.provider,
         dom: opts.dom,
+        serving,
       });
-      out.graphSku = out.gate.action === "mount" ? out.gate.graph : opts.graph;
+      out.servingSku = out.gate.serving;
+      out.graphSku = out.gate.graph;
     }
   }
   return out;
@@ -159,8 +171,10 @@ export function servingGraphForTask(ctrl: ControlledBatch, taskId: string): Agen
 }
 
 export function servingModelForTask(ctrl: ControlledBatch, taskId: string): string | undefined {
-  const g = servingGraphForTask(ctrl, taskId);
-  return g ? servingModelOfGraph(g) : undefined;
+  if ((ctrl.applyScope.weighted ?? []).includes(taskId)) {
+    return ctrl.servingSku.sku;
+  }
+  return ctrl.serving.sku;
 }
 
 export { CATALOG_JUMP_MODEL, recommendIntervention, recommendSliceIntervention };

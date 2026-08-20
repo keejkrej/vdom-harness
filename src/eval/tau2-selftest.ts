@@ -8,7 +8,7 @@ import {
   type Provider,
 } from "../providers.js";
 import { RuntimeDOM } from "../reconciler.js";
-import { findNode } from "../ir.js";
+import { findNode, flatten } from "../ir.js";
 import { runTau2Turn } from "./tau2-turn.js";
 import { observeTau2, actionFromCompletion, markRepeats } from "./tau2-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
@@ -41,10 +41,15 @@ import {
   applyISku,
   CATALOG_JUMP_MODEL,
   CATALOG_JUMP_NOTE,
+  catalogPointer,
+  catalogSwapOnServing,
+  cTopology,
   proposeCatalogJump,
+  sameCTopology,
   SERVING_MODEL,
   servingModelOfGraph,
   servingProviderAfterJump,
+  servingSkuOf,
   thetaJumped,
 } from "./tau2-weight.js";
 
@@ -1258,6 +1263,10 @@ async function testPostGate3944Replay(): Promise<void> {
   assertEq(omit.proposal?.model, CATALOG_JUMP_MODEL, "slow arm proposes pro-0813");
   assertEq(omit.gate?.action, "reject", "omit after-eval → reject; 0813 existing is not a gate");
   assert(omit.gate?.reason.includes("measured after-eval"), "gate names the missing eval");
+  assert(omit.gate?.reason.includes("0813 existing is not a gate"), "existence is not a gate");
+  assertEq(omit.gate?.jumped, false, "omit after is not a jump");
+  assertEq(omit.serving.sku, SERVING_MODEL, "omit after: S0 stays 0731");
+  assertEq(omit.servingSku.sku, SERVING_MODEL, "omit after: S stays 0731");
   assertEq(omit.servingPaused, false, "controller never pauses serve");
   assertEq(omit.trained, false, "44 did not train");
   assert(CONTROLLER_NOTE.includes("hung/incomplete"), "controller license is hung/incomplete");
@@ -1278,7 +1287,15 @@ async function testPostGate3944Replay(): Promise<void> {
   assertEq(mounted.gate?.action, "mount", "fixture after=before+ε may mount");
   assertEq(mounted.servingPaused, false, "mount never pauses serve");
   assertEq(mounted.trained, false, "mount is not a train");
-  assertEq(servingModelForTask(mounted, "44"), CATALOG_JUMP_MODEL, "44 serving model id is 0813 after fixture mount");
+  assertEq(mounted.serving.sku, SERVING_MODEL, "S0 stays 0731; I_loop did not write S");
+  assertEq(mounted.servingSku.sku, CATALOG_JUMP_MODEL, "I_sku wrote S to 0813");
+  assertEq(findNode(mounted.graphC0!, "solve")?.model, SERVING_MODEL, "C0 n.model stays 0731");
+  assertEq(findNode(mounted.graphSku!, "solve")?.model, SERVING_MODEL, "graphSku is C0, not a rebound n.model");
+  assertEq(
+    servingModelForTask(mounted, "44"),
+    CATALOG_JUMP_MODEL,
+    "44 serving model id is 0813 after fixture mount even if C0.solve.model is 0731",
+  );
   assertEq(servingModelForTask(mounted, "39"), SERVING_MODEL, "39 C1 stays on base SKU 0731");
   assertEq(mounted.applyScope.waitKept.join(","), "", "fixture mount waitKept=[]");
 
@@ -1318,9 +1335,11 @@ async function testCatalogJumpMounts0813(): Promise<void> {
   registerProvider(SERVING_MODEL, mock0731);
 
   const start = tau2Graph("one-shot", SERVING_MODEL);
+  const s0 = catalogPointer(SERVING_MODEL);
   const dom = new RuntimeDOM();
   dom.reconcile(start);
-  assertEq(servingModelOfGraph(start), SERVING_MODEL, "pre-gate serving is 0731");
+  assertEq(servingSkuOf(s0), SERVING_MODEL, "pre-gate S is 0731");
+  assertEq(servingModelOfGraph(start), SERVING_MODEL, "pre-gate C n.model is 0731 (derived, not S)");
   assertEq(dom.current.get("solve")?.provider?.model, SERVING_MODEL, "PhysicalNode bound to 0731");
 
   const noEval = applyISku({
@@ -1328,11 +1347,14 @@ async function testCatalogJumpMounts0813(): Promise<void> {
     before: 0,
     provider: mock0813,
     dom,
+    serving: s0,
   });
   assertEq(noEval.action, "reject", "no after-eval rejects");
   assertEq(noEval.jumped, false, "0813 existing is not a jump");
   assert(noEval.reason.includes("0813 existing is not a gate"), "existence is not a gate");
-  assertEq(servingModelOfGraph(noEval.graph), SERVING_MODEL, "no-eval keeps 0731");
+  assertEq(noEval.serving.sku, SERVING_MODEL, "no-eval S stays 0731");
+  assertEq(servingModelOfGraph(noEval.graph), SERVING_MODEL, "no-eval C n.model stays 0731");
+  assertEq(noEval.servingPaused, false, "reject servingPaused is false");
 
   const reject = applyISku({
     graph: start,
@@ -1340,6 +1362,7 @@ async function testCatalogJumpMounts0813(): Promise<void> {
     after: 0,
     provider: mock0813,
     dom,
+    serving: s0,
   });
   assertEq(reject.action, "reject", "rejected gate is a negative");
   assertEq(reject.arm, "I_sku", "reject is still the I_sku arm");
@@ -1348,8 +1371,11 @@ async function testCatalogJumpMounts0813(): Promise<void> {
   assertEq(reject.servingPaused, false, "reject never pauses serve");
   assertEq(reject.jumped, false, "reject is not a jump");
   assertEq(thetaJumped(reject), false, "thetaJumped false on reject");
-  assertEq(servingModelOfGraph(reject.graph), SERVING_MODEL, "reject keeps 0731");
+  assertEq(reject.serving.sku, SERVING_MODEL, "reject S stays 0731");
+  assertEq(servingModelOfGraph(reject.graph), SERVING_MODEL, "reject C n.model stays 0731");
   assertEq(findNode(reject.graph, "solve")?.model, SERVING_MODEL, "reject n.model stays 0731");
+  const laterReject = servingProviderAfterJump(reject.graph, mock0731, dom, "solve", reject.serving);
+  assertEq(laterReject.model, SERVING_MODEL, "reject later serving keeps 0731");
 
   const mount = applyISku({
     graph: start,
@@ -1357,24 +1383,101 @@ async function testCatalogJumpMounts0813(): Promise<void> {
     after: 1,
     provider: mock0813,
     dom,
+    serving: s0,
   });
   assertEq(mount.action, "mount", "gate=mount");
   assertEq(mount.arm, "I_sku", "mount is I_sku, not I_weight-as-trainer");
   assertEq(mount.kind, "catalog-rebind", "mount log is catalog-rebind");
   assertEq(mount.trained, false, "catalog-rebind is not a train");
+  assertEq(mount.notFineTuning, true, "does not claim fine-tuning");
   assertEq(mount.servingPaused, false, "mount never pauses serve");
   assertEq(mount.jumped, true, "mount is a catalog jump");
   assertEq(thetaJumped(mount), true, "θ jumped only on mount + 0813");
-  assertEq(servingModelOfGraph(mount.graph), CATALOG_JUMP_MODEL, "post-mount serving model id is 0813");
-  assertEq(findNode(mount.graph, "solve")?.model, CATALOG_JUMP_MODEL, "n.model rebound to 0813");
+  assert(sameCTopology(mount.graph, start), "I_sku does not rewrite C topology");
+  assertEq(
+    JSON.stringify(cTopology(mount.graph)),
+    JSON.stringify(cTopology(mount.graphBefore)),
+    "flatten keys / objectives / prompts of C equal graphBefore",
+  );
+  assertEq(findNode(mount.graph, "solve")?.model, SERVING_MODEL, "C n.model stays 0731; S is not n.model");
+  assertEq(servingModelOfGraph(mount.graph), SERVING_MODEL, "derived C projection stays 0731");
+  assertEq(mount.serving.sku, CATALOG_JUMP_MODEL, "S is 0813");
+  assertEq(mount.servingModelId, CATALOG_JUMP_MODEL, "serving id is 0813");
+  assertEq(catalogSwapOnServing(mount.serving), true, "catalog swap is on S, not C");
   assertEq(
     dom.current.get("solve")?.provider?.model,
     CATALOG_JUMP_MODEL,
-    "PhysicalNode.provider rebound to 0813",
+    "PhysicalNode.provider rebound to 0813 (derived from S)",
   );
-  const later = servingProviderAfterJump(mount.graph, mock0731, dom);
+  const later = servingProviderAfterJump(mount.graph, mock0731, dom, "solve", mount.serving);
   assertEq(later.model, CATALOG_JUMP_MODEL, "later serving step uses 0813, not 0731");
   assert(later !== mock0731, "later step is not the 0731 client");
+}
+
+async function testILoopDoesNotWriteS(): Promise<void> {
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const s0 = catalogPointer(SERVING_MODEL);
+  const miss = missCancelObs("39");
+  const loop = applyILoop(start, miss);
+  assertEq(loop.applied, true, "completed-miss 39 applies I_loop");
+  assert(graphHas(loop.graphAfter, "policy-checklist"), "I_loop mutated C");
+  assertEq(servingSkuOf(s0), SERVING_MODEL, "I_loop does not write the CatalogPointer");
+  assertEq(findNode(loop.graphAfter, "solve")?.model, SERVING_MODEL, "I_loop keeps C n.model at 0731");
+
+  const ctrl = controlBatch([miss], { graph: start });
+  assertEq(ctrl.buckets["39"], "I_loop", "39 is I_loop");
+  assertEq(ctrl.applied.join(","), "I_loop", "only I_loop applied");
+  assertEq(ctrl.serving.sku, SERVING_MODEL, "controlBatch I_loop: S0 stays 0731");
+  assertEq(ctrl.servingSku.sku, SERVING_MODEL, "controlBatch I_loop: S stays 0731");
+  assertEq(ctrl.gate, undefined, "I_loop batch does not run I_sku");
+  assertEq(ctrl.servingPaused, false, "I_loop never pauses serve");
+  assertEq(ctrl.trained, false, "I_loop is not a train");
+}
+
+async function testServingPointerBesideC(): Promise<void> {
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const beforeTopo = cTopology(start);
+  const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, new DeterministicProvider(SERVING_MODEL));
+
+  const looped = controlBatch([missCancelObs("39")], { graph: start });
+  assertEq(looped.servingSku.sku, SERVING_MODEL, "1. I_loop does not change S");
+  assertEq(servingModelForTask(looped, "39"), SERVING_MODEL, "1. serving SKU stays 0731");
+
+  const mount = applyISku({ graph: start, before: 0, after: 1, serving: catalogPointer() });
+  assertEq(JSON.stringify(cTopology(mount.graph)), JSON.stringify(beforeTopo), "2. C flatten keys/objectives/prompts unchanged");
+  assert(flatten(mount.graph).every((f) => (f.node.model ?? SERVING_MODEL) !== CATALOG_JUMP_MODEL), "2. no node.model is 0813");
+  assertEq(mount.serving.sku, CATALOG_JUMP_MODEL, "2. only S is 0813");
+  assertEq(mount.servingModelId, CATALOG_JUMP_MODEL, "2. later serving id is 0813");
+  assertEq(mount.servingPaused, false, "6. servingPaused false on mount");
+  assertEq(mount.trained, false, "6. trained false");
+  assertEq(mount.kind, "catalog-rebind", "6. catalog-rebind label");
+  assertEq(mount.notFineTuning, true, "6. not fine-tuning");
+
+  const obs39 = missCancelObs("39");
+  const obs44 = hungObs("44");
+  const omit = controlBatch([obs39, obs44], { graph: start });
+  assertEq(omit.buckets["39"], "I_loop", "3. 39 I_loop");
+  assertEq(omit.buckets["44"], "I_sku", "3. 44 I_sku");
+  assertEq(omit.applyScope.waitKept.join(","), "", "3. waitKept empty");
+  assert(omit.applied.includes("I_loop") && omit.applied.includes("I_sku"), "3. applied both buckets");
+  assertEq(omit.servingSku.sku, SERVING_MODEL, "4. omit after: S stays 0731");
+  assertEq(omit.gate?.jumped, false, "4. jumped=false");
+  assertEq(omit.servingPaused, false, "4. servingPaused=false");
+  assert(omit.gate?.reason.includes("0813 existing is not a gate"), "4. existence is not a gate");
+
+  const mounted = controlBatch([obs39, obs44], {
+    graph: start,
+    before: 0,
+    after: 1e-6,
+    provider: mock0813,
+  });
+  assertEq(findNode(mounted.graphC0!, "solve")?.model, SERVING_MODEL, "3. C0 isolation: solve.model still 0731");
+  assertEq(servingModelForTask(mounted, "44"), CATALOG_JUMP_MODEL, "3. servingModelForTask(44) is 0813");
+  assertEq(servingModelForTask(mounted, "39"), SERVING_MODEL, "3. servingModelForTask(39) stays 0731");
+  assertEq(mounted.servingPaused, false, "6. mount servingPaused false");
+  assertEq(mounted.trained, false, "6. mount not a trainer");
 }
 
 async function testWordReverseUntouched(): Promise<void> {
@@ -1412,6 +1515,8 @@ async function main(): Promise<void> {
     ["typed arms: hung I_sku / hit wait / policy I_loop", testTypedInterventionArms],
     ["post-gate 39/44 replay: 39 I_loop, hung 44 I_sku, waitKept=[]", testPostGate3944Replay],
     ["I_sku catalog-rebind mounts 0813 (mocked bind, not LoRA)", testCatalogJumpMounts0813],
+    ["I_loop does not write S", testILoopDoesNotWriteS],
+    ["S is a CatalogPointer beside C, not n.model", testServingPointerBesideC],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

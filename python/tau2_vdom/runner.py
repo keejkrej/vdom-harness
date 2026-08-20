@@ -390,12 +390,15 @@ def control_batch(
         applied.append("I_loop")
     if scope.get("weighted"):
         applied.append("I_sku")
+    serving = {"sku": DEFAULT_MODEL, "servingPaused": False}
     return {
         "episodes": episodes,
         "slice": recommend_slice_intervention(obs_list, loop_exhausted=loop_exhausted),
         "buckets": buckets,
         "applied": applied,
         "applyScope": scope,
+        "serving": serving,
+        "servingSku": serving,
         "servingPaused": False,
         "trained": False,
         "notFineTuning": True,

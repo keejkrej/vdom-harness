@@ -76,14 +76,19 @@ function buildUser(
   return parts.join("\n\n");
 }
 
-/** Prefer the physical node's bound client; else resolve from n.model; else fallback. */
+/**
+ * Prefer the physical node's bound client; else S (servingSku); else n.model; else fallback.
+ * n.model is a derived projection of C, not the paper S coordinate.
+ */
 export function providerForNode(
   n: AgentNode,
   fallback: Provider,
   dom?: RuntimeDOM,
+  servingSku?: string,
 ): Provider {
   const bound = dom?.current.get(n.key)?.provider;
   if (bound) return bound;
+  if (servingSku) return resolveProvider(servingSku);
   if (modelId(n.model) != null) return resolveProvider(n.model);
   return fallback;
 }

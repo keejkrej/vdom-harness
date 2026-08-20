@@ -159,7 +159,7 @@ export function graphsByApplyScope(
 ): Record<string, AgentGraph> {
   const out: Record<string, AgentGraph> = {};
   for (const id of scope.waitKept) out[id] = graphBefore;
-  for (const id of scope.weighted ?? []) out[id] = graphSku ?? graphBefore;
+  for (const id of scope.weighted ?? []) out[id] = graphSku ?? graphBefore; // C0 topology; S is separate
   for (const id of scope.looped) out[id] = graphAfter;
   return out;
 }
@@ -172,8 +172,7 @@ export function graphForScopedTask(
   graphSku?: AgentGraph,
 ): AgentGraph {
   if (scope.waitKept.includes(taskId)) return graphBefore;
-  // SKU is a sibling serving graph for the weighted bucket. If omitted, isolation
-  // would serve unrebound C0 and swallow I_sku — callers must pass graphSku after a mount.
+  // Weighted bucket keeps C0 topology. Serving SKU is S (CatalogPointer), not n.model.
   if ((scope.weighted ?? []).includes(taskId)) return graphSku ?? graphBefore;
   if (scope.looped.includes(taskId)) return graphAfter;
   if (scope.waitKept.length > 0 || (scope.weighted ?? []).length > 0) return graphBefore;
@@ -187,7 +186,7 @@ export function selectServingGraph(opts: {
   currentGraph: AgentGraph;
   graphBefore: AgentGraph;
   graphAfter?: AgentGraph;
-  /** Sibling I_sku graph. Weighted tasks use this so C0 isolation cannot swallow 0813. */
+  /** C0 topology for the weighted bucket. S (CatalogPointer) is the serving SKU. */
   graphSku?: AgentGraph;
   applyScope?: ApplyScope;
 }): AgentGraph {
@@ -429,7 +428,7 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
 /**
  * FakeTrainer / TrainJob eval gate (protocol stub). Not the paper slow arm.
  * The official incomplete actuator is applyISku: propose pro-0813, gate,
- * rebind n.model (catalog rebind, not fine-tuning). FakeTrainer / surrogate-prefix
+ * write S (catalog pointer beside C, not n.model). FakeTrainer / surrogate-prefix
  * are not jumps and must not be reported as a θ win.
  */
 export function gateWeightMount(before: number, after: number): WeightGateDecision {
