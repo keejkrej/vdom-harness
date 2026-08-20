@@ -36,8 +36,10 @@ import {
   CONTROLLER_NOTE,
   appliedFromScope,
   controlBatch,
+  controllerServingLog,
   servingGraphForTask,
   servingModelForTask,
+  servingProviderForTask,
 } from "./tau2-control.js";
 import {
   applyISku,
@@ -1238,9 +1240,11 @@ async function testPostGate3944Replay(): Promise<void> {
   const omit = controlBatch([obs39, obs44], { loopExhausted: false, graph: start });
   assertEq(omit.episodes[0]?.arm, "I_loop", "controller: 39 I_loop");
   assertEq(omit.episodes[0]?.license, "attractor", "39 licensed by completed attractor");
+  assertEq(omit.episodes[0]?.serving.sku, SERVING_MODEL, "omit: 39 episode S is 0731");
   assertEq(omit.episodes[1]?.arm, "I_sku", "controller: 44 I_sku");
   assertEq(omit.episodes[1]?.hung, true, "controller reads hung on 44");
   assertEq(omit.episodes[1]?.license, "hung", "44 licensed by hung, not a pricier model");
+  assertEq(omit.episodes[1]?.serving.sku, SERVING_MODEL, "omit: 44 episode S stays 0731");
   assertEq(omit.slice, "I_sku", "mixed slice is I_sku because 44 hung");
   assertEq(omit.buckets["39"], "I_loop", "bucket 39 is I_loop");
   assertEq(omit.buckets["44"], "I_sku", "bucket 44 is I_sku");
@@ -1299,6 +1303,10 @@ async function testPostGate3944Replay(): Promise<void> {
     "44 serving model id is 0813 after fixture mount even if C0.solve.model is 0731",
   );
   assertEq(servingModelForTask(mounted, "39"), SERVING_MODEL, "39 C1 stays on base SKU 0731");
+  assertEq(mounted.episodes[0]?.serving.sku, SERVING_MODEL, "mounted: 39.sku=0731");
+  assertEq(mounted.episodes[1]?.serving.sku, CATALOG_JUMP_MODEL, "mounted: 44.sku=0813");
+  const replayLog = controllerServingLog(mounted);
+  assertEq(replayLog.text, "39.sku=0731 44.sku=0813", "controller log 39.sku=0731 44.sku=0813");
   assertEq(mounted.applyScope.waitKept.join(","), "", "fixture mount waitKept=[]");
 
   const slow = proposeCatalogJump();
@@ -1431,6 +1439,7 @@ async function testILoopDoesNotWriteS(): Promise<void> {
   assertEq(ctrl.applied.join(","), "I_loop", "only I_loop applied");
   assertEq(ctrl.serving.sku, SERVING_MODEL, "controlBatch I_loop: S0 stays 0731");
   assertEq(ctrl.servingSku.sku, SERVING_MODEL, "controlBatch I_loop: S stays 0731");
+  assertEq(ctrl.episodes[0]?.serving.sku, SERVING_MODEL, "I_loop episode S stays 0731");
   assertEq(ctrl.gate, undefined, "I_loop batch does not run I_sku");
   assertEq(ctrl.servingPaused, false, "I_loop never pauses serve");
   assertEq(ctrl.trained, false, "I_loop is not a train");
@@ -1478,6 +1487,8 @@ async function testServingPointerBesideC(): Promise<void> {
   assertEq(findNode(mounted.graphC0!, "solve")?.model, SERVING_MODEL, "3. C0 isolation: solve.model still 0731");
   assertEq(servingModelForTask(mounted, "44"), CATALOG_JUMP_MODEL, "3. servingModelForTask(44) is 0813");
   assertEq(servingModelForTask(mounted, "39"), SERVING_MODEL, "3. servingModelForTask(39) stays 0731");
+  assertEq(mounted.episodes[0]?.serving.sku, SERVING_MODEL, "3. episode 39 S is 0731");
+  assertEq(mounted.episodes[1]?.serving.sku, CATALOG_JUMP_MODEL, "3. episode 44 S is 0813");
   assertEq(mounted.servingPaused, false, "6. mount servingPaused false");
   assertEq(mounted.trained, false, "6. mount not a trainer");
 }
@@ -1516,6 +1527,9 @@ async function testMixed3944LaterServingTypedByS(): Promise<void> {
   assertEq(findNode(mounted.graphC0!, "solve")?.model, SERVING_MODEL, "C n.model stays 0731");
   assertEq(servingModelForTask(mounted, "39"), SERVING_MODEL, "39 S is 0731");
   assertEq(servingModelForTask(mounted, "44"), CATALOG_JUMP_MODEL, "44 S is 0813");
+  assertEq(mounted.episodes[0]?.serving.sku, SERVING_MODEL, "ControlledEpisode 39.serving is 0731");
+  assertEq(mounted.episodes[1]?.serving.sku, CATALOG_JUMP_MODEL, "ControlledEpisode 44.serving is 0813");
+  assertEq(controllerServingLog(mounted).text, "39.sku=0731 44.sku=0813", "JSON/controller log splits S");
 
   const solve39 = findNode(servingGraphForTask(mounted, "39")!, "solve")!;
   const solve44 = findNode(servingGraphForTask(mounted, "44")!, "solve")!;
@@ -1527,6 +1541,53 @@ async function testMixed3944LaterServingTypedByS(): Promise<void> {
     dom.current.get("solve")?.provider?.model !== CATALOG_JUMP_MODEL,
     "I_loop path bound PhysicalNode.provider is not 0813",
   );
+  const omitSku = providerForNode(solve44, mock0731, dom);
+  assertEq(omitSku.model, SERVING_MODEL, "omit SKU is not a jump; bound/n.model stay 0731");
+  const viaHelper39 = servingProviderForTask(mounted, "39", mock0731, dom);
+  const viaHelper44 = servingProviderForTask(mounted, "44", mock0731, dom);
+  assertEq(viaHelper39.model, SERVING_MODEL, "official helper passes 39 S=0731");
+  assertEq(viaHelper44.model, CATALOG_JUMP_MODEL, "official helper passes 44 S=0813");
+  const omitAfterJump = servingProviderAfterJump(mounted.graphSku ?? start, mock0731, dom, "solve");
+  assertEq(omitAfterJump.model, SERVING_MODEL, "servingProviderAfterJump without S is not a jump");
+}
+
+async function testFreshBatchDoesNotInheritProcessServingSku(): Promise<void> {
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
+  const mock0731 = new DeterministicProvider(SERVING_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, mock0731);
+  const dom = new RuntimeDOM();
+  dom.reconcile(start);
+
+  const mounted = controlBatch([missCancelObs("39"), hungObs("44")], {
+    graph: start,
+    before: 0,
+    after: 1e-6,
+    provider: mock0813,
+    dom,
+  });
+  assertEq(mounted.gate?.action, "mount", "fixture mount first");
+  assertEq(mounted.servingSku.sku, CATALOG_JUMP_MODEL, "prior batch I_sku cell is 0813");
+  assertEq(mounted.episodes[1]?.serving.sku, CATALOG_JUMP_MODEL, "prior 44 episode S is 0813");
+  assertEq(controllerServingLog(mounted).text, "39.sku=0731 44.sku=0813", "prior log splits S");
+
+  // HybridState.S falsifier of a module global: a FRESH 39-only I_loop batch
+  // must not read the previous process / batch servingSku=0813.
+  const fresh = controlBatch([missCancelObs("39")], { graph: start, dom });
+  assertEq(fresh.buckets["39"], "I_loop", "fresh batch is 39-only I_loop");
+  assertEq(fresh.applied.join(","), "I_loop", "fresh batch does not run I_sku");
+  assertEq(fresh.gate, undefined, "fresh I_loop does not inherit a prior I_sku cell");
+  assertEq(fresh.serving.sku, SERVING_MODEL, "fresh batch S0 is 0731");
+  assertEq(fresh.servingSku.sku, SERVING_MODEL, "fresh batch does not inherit servingSku=0813");
+  assertEq(fresh.episodes[0]?.serving.sku, SERVING_MODEL, "fresh 39 episode S is 0731");
+  assertEq(servingModelForTask(fresh, "39"), SERVING_MODEL, "fresh servingModelForTask(39) is 0731");
+  assertEq(fresh.servingPaused, false, "fresh servingPaused is false");
+  assertEq(fresh.episodes.length, 1, "two episodes in the prior batch; one in the fresh batch");
+  const p39 = servingProviderForTask(fresh, "39", mock0731, dom);
+  assertEq(p39.model, SERVING_MODEL, "fresh later serving 39 is 0731, not leftover 0813");
+  const omitSku = providerForNode(findNode(start, "solve")!, mock0731, dom);
+  assertEq(omitSku.model, SERVING_MODEL, "omit SKU after prior mount is still not a jump");
 }
 
 async function testWordReverseUntouched(): Promise<void> {
@@ -1567,6 +1628,7 @@ async function main(): Promise<void> {
     ["I_loop does not write S", testILoopDoesNotWriteS],
     ["S is a CatalogPointer beside C, not n.model", testServingPointerBesideC],
     ["mixed 39/44 later serving typed by S, not sprayed provider", testMixed3944LaterServingTypedByS],
+    ["fresh 39-only batch does not inherit process servingSku=0813", testFreshBatchDoesNotInheritProcessServingSku],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

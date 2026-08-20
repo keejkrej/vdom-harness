@@ -4,7 +4,7 @@
  *
  * Fast clock: set_technique / i_loop / turn keep answering.
  * I_sku (i_sku) is the slow arm: propose pro-0813, gate, write S
- * (catalog pointer beside C; not n.model; not I_weight-as-trainer).
+ * onto weighted episodes only (per-task map; not a process servingSku).
  * servingPaused is always false. FakeTrainer / i_weight_* are stubs.
  */
 import { createProvider, DeterministicProvider, resolveProvider, type Message, type ToolSpec } from "../providers.js";
@@ -83,6 +83,7 @@ type SidecarReply = Tau2TurnResponse & {
   servingModel?: string;
   serving?: CatalogPointer;
   servingSku?: CatalogPointer;
+  servingByTask?: Record<string, CatalogPointer>;
   trained?: false;
   catalog?: ReturnType<typeof applyISku>;
 };
@@ -100,29 +101,40 @@ let graphC0: AgentGraph = currentGraph;
 let graphC1: AgentGraph | undefined;
 let graphSku: AgentGraph | undefined;
 let applyScope: ApplyScope | undefined;
-/** Paper S0. I_loop never writes this. */
+/** Paper S0. New batches / resets start here. Not a leftover process sku. */
 let servingS0: CatalogPointer = catalogPointer(SERVING_MODEL);
-/** S after I_sku. Later serving / weighted tasks read this, not n.model. */
-let servingSku: CatalogPointer = servingS0;
+/**
+ * Per-task S. I_sku mount writes only weighted ids. I_loop never writes.
+ * Process-global servingSku is not the source of truth.
+ */
+const servingByTask = new Map<string, CatalogPointer>();
+
+function resetServingState(): void {
+  servingS0 = catalogPointer(SERVING_MODEL);
+  servingByTask.clear();
+}
 
 function resetApplyScope(): void {
   applyScope = undefined;
   graphC1 = undefined;
   graphSku = undefined;
   graphC0 = currentGraph;
-  servingS0 = catalogPointer(SERVING_MODEL);
-  servingSku = servingS0;
+  resetServingState();
 }
 
-/** Per-task S pick. Process-level default is not HybridState.S; mixed 39/44 must not leak 0813 onto 39. */
+function servingForRequest(taskId?: string): CatalogPointer {
+  if (taskId && servingByTask.has(taskId)) return servingByTask.get(taskId)!;
+  return servingS0;
+}
+
+function servingByTaskRecord(): Record<string, CatalogPointer> {
+  return Object.fromEntries(servingByTask);
+}
+
+/** Per-task S pick. Omit task / omit SKU → S0, not last I_sku mount. Not a jump. */
 function servingModelForRequest(taskId?: string, reqModel?: string): string {
-  if (taskId && applyScope) {
-    if ((applyScope.weighted ?? []).includes(taskId)) return servingSku.sku;
-    if (applyScope.looped.includes(taskId) || applyScope.waitKept.includes(taskId)) {
-      return servingS0.sku;
-    }
-  }
-  return servingSku.sku || reqModel || SERVING_MODEL;
+  if (taskId) return servingForRequest(taskId).sku;
+  return servingS0.sku || reqModel || SERVING_MODEL;
 }
 
 function liveGraph(taskId?: string, reqGraph?: AgentGraph): AgentGraph {
@@ -170,8 +182,9 @@ async function handle(line: string): Promise<void> {
       technique: currentTechnique,
       servingPaused: false,
       serving: servingS0,
-      servingSku,
-      servingModel: servingSku.sku,
+      servingSku: servingS0,
+      servingModel: servingS0.sku,
+      servingByTask: servingByTaskRecord(),
     });
     return;
   }
@@ -184,8 +197,9 @@ async function handle(line: string): Promise<void> {
       graph: currentGraph,
       servingPaused: false,
       serving: servingS0,
-      servingSku,
-      servingModel: servingSku.sku,
+      servingSku: servingS0,
+      servingModel: servingS0.sku,
+      servingByTask: servingByTaskRecord(),
     });
     return;
   }
@@ -200,13 +214,16 @@ async function handle(line: string): Promise<void> {
       graph: currentGraph,
       servingPaused: false,
       serving: servingS0,
-      servingSku,
-      servingModel: servingSku.sku,
+      servingSku: servingS0,
+      servingModel: servingS0.sku,
+      servingByTask: servingByTaskRecord(),
     });
     return;
   }
 
   if (req.op === "i_loop" || req.op === "self_obs") {
+    // New I_loop batch starts at S0. I_loop never writes S; do not inherit last mount.
+    resetServingState();
     const result = await runSelfObs({
       graph: req.graph ?? currentGraph,
       traces: req.traces as Array<{ nodeKey?: string; role?: string; output?: string }>,
@@ -250,8 +267,9 @@ async function handle(line: string): Promise<void> {
       applied: result.applied,
       applyScope: result.applyScope,
       serving: servingS0,
-      servingSku,
-      servingModel: servingSku.sku,
+      servingSku: servingS0,
+      servingModel: servingS0.sku,
+      servingByTask: servingByTaskRecord(),
     });
     return;
   }
@@ -264,12 +282,15 @@ async function handle(line: string): Promise<void> {
       graph: req.graph ?? currentGraph,
       before,
       after,
-      serving: servingSku,
+      serving: servingS0,
     });
     if (catalog.action === "mount") {
-      // C topology stays C0. S is the pointer. Do not overwrite C0 n.model.
+      // C topology stays C0. Write S only onto weighted episode ids. No process sku.
       graphSku = catalog.graph;
-      servingSku = catalog.serving;
+      const weighted = applyScope?.weighted ?? [];
+      for (const taskId of weighted) {
+        servingByTask.set(taskId, catalog.serving);
+      }
     }
     write({
       op: "ok",
@@ -279,6 +300,7 @@ async function handle(line: string): Promise<void> {
       servingModel: catalog.servingModelId,
       serving: catalog.serving,
       servingSku: catalog.serving,
+      servingByTask: servingByTaskRecord(),
       catalog,
       trained: false,
       gate: {
@@ -423,8 +445,9 @@ async function handle(line: string): Promise<void> {
       graphEdits: result.graphEdits,
       servingPaused: false,
       servingModel,
-      serving: servingSku,
-      servingSku,
+      serving: servingForRequest(req.taskId),
+      servingSku: servingForRequest(req.taskId),
+      servingByTask: servingByTaskRecord(),
     });
   } catch (err) {
     write({

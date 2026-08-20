@@ -375,6 +375,8 @@ def test_post_gate_39_44_obs_batch() -> None:
     assert ctrl["trained"] is False
     assert ctrl["serving"]["sku"] == SERVING_MODEL
     assert ctrl["servingSku"]["sku"] == SERVING_MODEL
+    assert ctrl["episodes"][0]["serving"]["sku"] == SERVING_MODEL
+    assert ctrl["episodes"][1]["serving"]["sku"] == SERVING_MODEL
     blob = " ".join(str(o.get("lastActions")) for o in batch)
     assert "MSJ4OA" not in blob
     assert "S61CZX" not in blob
@@ -484,6 +486,29 @@ def test_mixed_3944_s_not_identified_with_c() -> None:
     )
     assert turn39.get("servingModel") == SERVING_MODEL
     assert turn39.get("servingPaused") is False
+
+    # HybridState.S falsifier: a FRESH 39-only I_loop must not inherit process 0813.
+    fresh = sidecar.request({"op": "i_loop", "obs": [obs39], "model": "deterministic"})
+    assert fresh.get("applied") is True
+    assert fresh.get("servingPaused") is False
+    assert fresh.get("serving", {}).get("sku") == SERVING_MODEL
+    assert fresh.get("servingSku", {}).get("sku") == SERVING_MODEL
+    assert fresh.get("servingModel") == SERVING_MODEL
+    turn_fresh = sidecar.request(
+        {
+            "op": "turn",
+            "taskId": "39",
+            "model": "deterministic",
+            "policy": "",
+            "tools": [],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+    assert turn_fresh.get("servingModel") == SERVING_MODEL
+    assert turn_fresh.get("servingPaused") is False
+    ping = sidecar.request({"op": "ping"})
+    assert ping.get("servingModel") == SERVING_MODEL
+    assert ping.get("servingSku", {}).get("sku") == SERVING_MODEL
 
 
 def test_hit_still_waits() -> None:

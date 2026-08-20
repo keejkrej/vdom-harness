@@ -91,7 +91,10 @@ export type Tau2Obs = {
  * Paper S — serving catalog pointer, held beside C.
  * Specified state is X=(H,M,E,C,S). S is not AgentNode.model (that field is C,
  * or a derived projection for PhysicalNode.provider).
- * I_loop never writes S. I_sku mount writes only S.
+ * I_loop never writes S. I_sku mount writes only S, and only onto the
+ * weighted episodes of that batch.
+ * Per-episode controller coordinate, not a process-global servingSku.
+ * Still not a live HybridState.S dump of a τ² episode / paper X_n.S.
  */
 export type CatalogPointer = {
   sku: string;

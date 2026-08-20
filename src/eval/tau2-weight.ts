@@ -9,6 +9,8 @@ export type { CatalogPointer, ServingSku } from "./tau2-types.js";
 /**
  * I_sku actuator: gated catalog rebind of the serving pointer S, not I_weight-as-trainer.
  * Base SKU is flash-0731 until gate=mount writes S to pro-0813.
+ * The cell returns S; the controller attaches it to weighted episodes only.
+ * Not a process-global servingSku. Still not a live HybridState.S dump.
  * C topology / n.model are not rewritten. servingPaused stays false.
  * Jump iff later serving model id is 0813. Not fine-tuning. No LoRA.
  */
@@ -207,7 +209,7 @@ export function applyISku(opts: {
 
   bindCatalogProvider(to, opts.provider);
   // Do not spray provider onto every PhysicalNode. Mixed 39/44 later serving
-  // picks the client from per-task S (39 → S0, 44 → servingSku).
+  // picks the client from that episode's S (39 → S0, 44 → 0813 if that gate mounted).
   const serving = catalogPointer(to);
   const jumped = serving.sku === CATALOG_JUMP_MODEL;
   return {
@@ -235,7 +237,10 @@ export function applyISku(opts: {
 export const applyICatalog = applyISku;
 export const applyIWeightCatalog = applyISku;
 
-/** Later serving step: client from S, not a sprayed PhysicalNode.provider. */
+/**
+ * Later serving step: client from S, not a sprayed PhysicalNode.provider.
+ * Official callers must pass S. Omitting serving is not a jump (bound / n.model).
+ */
 export function servingProviderAfterJump(
   graph: AgentGraph,
   fallback: Provider,
