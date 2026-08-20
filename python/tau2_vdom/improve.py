@@ -1,6 +1,6 @@
 """Closed-loop runtime self-improvement on τ².
 
-self-observe → I_loop | I_weight → run again → self-observe, until pass^k
+self-observe → I_loop | I_sku → run again → self-observe, until pass^k
 saturates or a round budget. Not a single before/after.
 
 Default no-key slice: official mock ``update_task_1`` + ``impossible_task_1``.
@@ -46,6 +46,10 @@ from tau2_vdom.runner import (
     _litellm_user_model,
     _obs,
     _pin_tau2_judges,
+    is_incomplete_obs,
+    control_batch,
+    recommend_intervention,
+    recommend_slice_intervention,
     serialize_reward_info,
     write_eval_file,
 )
@@ -56,7 +60,7 @@ SATURATED_NOTE = (
     "Use mock update_task_1 + impossible_task_1 (no key), airline, or retail beyond 0–4."
 )
 CLAIM = (
-    "Closed loop: self-observe → I_loop or I_weight → run again → self-observe, "
+    "Closed loop: self-observe → I_loop or I_sku → run again → self-observe, "
     "until pass^k saturates or the round budget. Serving does not pause. "
     "The agent may get_agent_graph / set_agent_graph mid-turn (local intercept) "
     "and may rewrite C on the slow-clock Obs; host I_loop is fallback if it never "
@@ -73,11 +77,23 @@ SKIP_POLICY = (
 # Two official mock tasks so the loop needs two I_loop rounds (not one before/after).
 DEFAULT_MOCK_TASKS = ["update_task_1", "impossible_task_1"]
 RETAIL_HELD_OUT = ["5", "6", "7", "8", "9"]
-# Deterministic incomplete episode for the I_weight protocol smoke (no live key).
+# Deterministic incomplete episode for the I_weight TrainJob stub (no live key).
 INCOMPLETE_FIXTURE_ID = "incomplete_fixture_1"
+SERVING_MODEL = "deepseek/deepseek-v4-flash-0731"
+CATALOG_JUMP_MODEL = "deepseek/deepseek-v4-pro-0813"
+I_SKU_NOTE = (
+    "I_sku is a gated catalog rebind licensed by hung/incomplete, not pick a pricier model. "
+    "Base SKU deepseek/deepseek-v4-flash-0731. Slow arm proposes "
+    "deepseek/deepseek-v4-pro-0813 (OpenRouter, GA 2026-08-12). "
+    "Gate is a measured after-eval; 0813 existing is not a gate. "
+    "Jump iff later serving model id is 0813. servingPaused stays false. "
+    "Catalog rebind, not fine-tuning. FakeTrainer and LoRA are not this arm."
+)
+I_CATALOG_NOTE = I_SKU_NOTE
 I_WEIGHT_NOTE = (
-    "I_weight is the slow clock for incomplete episodes; 0731 is API-frozen "
-    "so the mount is a surrogate or a reject, never a fake LoRA."
+    "I_weight TrainJob is a protocol stub, not the paper slow arm and not fine-tuning. "
+    "The official incomplete arm is I_sku (catalog rebind to pro-0813). "
+    + I_SKU_NOTE
 )
 
 
@@ -285,8 +301,9 @@ def run_slice(
 
 
 def apply_scope_from_obs(obs_list: list[dict[str, Any]]) -> dict[str, list[str]]:
-    """Wait+hit keep C0; miss / I_loop get C1. Host mirror of the sidecar applyScope."""
+    """Wait+hit keep C0; completed I_loop miss get C1; incomplete / I_sku keep C0."""
     hits: set[str] = set()
+    incompletes: set[str] = set()
     order: list[str] = []
     for o in obs_list:
         tid = str(o.get("taskId") or "")
@@ -294,12 +311,18 @@ def apply_scope_from_obs(obs_list: list[dict[str, Any]]) -> dict[str, list[str]]
             continue
         if tid not in order:
             order.append(tid)
-        hit = o.get("arm") == "wait" and o.get("nSuccessProxy") == 1 and not o.get("hung")
+        arm = o.get("arm") or recommend_intervention(o)
+        hit = arm == "wait" and o.get("nSuccessProxy") == 1 and not o.get("hung")
         if hit:
             hits.add(tid)
+        elif arm == "I_loop":
+            continue
+        elif arm in {"I_sku", "I_catalog", "I_weight"} or is_incomplete_obs(o):
+            incompletes.add(tid)
     wait_kept = [tid for tid in order if tid in hits]
-    looped = [tid for tid in order if tid not in hits]
-    return {"waitKept": wait_kept, "looped": looped}
+    weighted = [tid for tid in order if tid in incompletes]
+    looped = [tid for tid in order if tid not in hits and tid not in incompletes]
+    return {"waitKept": wait_kept, "looped": looped, "weighted": weighted}
 
 
 def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
@@ -310,6 +333,9 @@ def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
             reward = float(sim.reward_info.reward)
         actions = _actions_from_messages(getattr(sim, "messages", []) or [])
         hung = bool(getattr(sim, "hung", False))
+        term = _termination(sim)
+        if hung and not term:
+            term = "timeout"
         obs_list.append(
             _obs(
                 actions,
@@ -319,6 +345,7 @@ def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
                 hung=hung,
                 messages=getattr(sim, "messages", None) or [],
                 task_id=str(getattr(sim, "task_id", "") or "") or None,
+                termination=term or None,
             )
         )
     return obs_list
@@ -425,7 +452,7 @@ def _sim_reward(sim: Any) -> float | None:
 
 
 def is_incomplete_episode(sim: Any) -> bool:
-    """I_weight trains on transfer / hung / crash / reward-0 early transfer."""
+    """Incomplete (hung / crash / no-write) licenses I_sku, not a train."""
     if bool(getattr(sim, "hung", False)):
         return True
     term = _termination(sim)
@@ -516,6 +543,49 @@ def incomplete_train_traces(
     return out
 
 
+def _sidecar_catalog_jump(
+    sidecar: Any,
+    *,
+    before: float,
+    after: float | None = None,
+) -> dict[str, Any]:
+    """I_sku actuator: propose pro-0813, gate, maybe rebind. Catalog rebind, not fine-tuning."""
+    req: dict[str, Any] = {
+        "op": "i_sku",
+        "model": CATALOG_JUMP_MODEL,
+        "before": before,
+    }
+    if after is not None:
+        req["after"] = after
+    res = sidecar.request(req)
+    ping = sidecar.request({"op": "ping"})
+    catalog = res.get("catalog") or {}
+    jumped = bool(res.get("jumped") or catalog.get("jumped"))
+    mounted = catalog.get("action") == "mount"
+    return {
+        "arm": "I_sku",
+        "kind": "catalog-rebind",
+        "notPostTraining": True,
+        "notFineTuning": True,
+        "trained": False,
+        "proposed": CATALOG_JUMP_MODEL,
+        "from": SERVING_MODEL,
+        "to": CATALOG_JUMP_MODEL,
+        "jumped": jumped,
+        "mounted": mounted,
+        "rejected": not mounted,
+        "servingPaused": bool(res.get("servingPaused")) or bool(ping.get("servingPaused")),
+        "servingModel": res.get("servingModel") or catalog.get("servingModelId") or SERVING_MODEL,
+        "gate": res.get("gate") or {},
+        "catalog": catalog,
+        "graph": res.get("graph") or catalog.get("graph"),
+        "honestNote": I_SKU_NOTE,
+        "not0731Weights": True,
+        "spawned": True,
+        "done": True,
+    }
+
+
 def _sidecar_weight(
     sidecar: Any,
     *,
@@ -525,7 +595,7 @@ def _sidecar_weight(
     trainer: str = "surrogate",
     base_model: str = "surrogate-theta",
 ) -> dict[str, Any]:
-    """Slow-clock I_weight: spawn, poll, gate. Fast clock is never paused."""
+    """I_weight TrainJob stub: spawn, poll, gate. Not I_sku and not a θ jump."""
     used = list(traces) if traces else incomplete_fixture_traces()
     spawned = sidecar.request(
         {
@@ -602,9 +672,11 @@ def _round_record(
     skipped: list[str] | None = None,
     reward_infos: list[dict[str, Any] | None] | None = None,
     i_weight: dict[str, Any] | None = None,
+    i_sku: dict[str, Any] | None = None,
     self_obs_path: str | None = None,
     self_obs: dict[str, Any] | None = None,
     apply_scope: dict[str, list[str]] | None = None,
+    controller: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rec: dict[str, Any] = {
         "round": round_i,
@@ -623,12 +695,16 @@ def _round_record(
     }
     if i_weight is not None:
         rec["iWeight"] = i_weight
+    if i_sku is not None:
+        rec["iSku"] = i_sku
     if self_obs_path:
         rec["selfObsPath"] = self_obs_path
     if self_obs:
         rec["selfObs"] = self_obs
     if apply_scope is not None:
         rec["applyScope"] = apply_scope
+    if controller is not None:
+        rec["controller"] = controller
     return rec
 
 
@@ -689,6 +765,7 @@ def run_improve(
     serving_paused = False
     rounds: list[dict[str, Any]] = []
     i_weight_report: dict[str, Any] | None = None
+    i_sku_report: dict[str, Any] | None = None
 
     sims, pass_hat, avg, path, skipped = run_slice(
         domain=domain,
@@ -731,6 +808,45 @@ def run_improve(
 
         miss = any(o.get("nSuccessProxy", 0) != 1 for o in obs)
         from tau2_vdom.agent import TURN_TRACES_BY_TASK
+
+        ctrl = control_batch(obs)
+        slice_arm = ctrl["slice"]
+        apply_scope = ctrl["applyScope"]
+        applied = list(ctrl["applied"])
+        # Consume buckets, not slice. Mixed 39/44 is slice=I_sku but 39 still I_loop.
+        sku_w: dict[str, Any] | None = None
+        if "I_sku" in applied:
+            current = _p_hit(pass_hat)
+            before = 0.0 if current is None else current
+            # Fixture after only at the controller; omit here so live airline
+            # cannot invent p_hit(0813)>p_hit(0731). 0813 existing is not a gate.
+            sku_w = _sidecar_catalog_jump(sidecar, before=before)
+            i_sku_report = sku_w
+            serving_paused = serving_paused or bool(sku_w.get("servingPaused"))
+
+        if "I_loop" not in applied and "I_sku" in applied:
+            rounds.append(
+                _round_record(
+                    round_i=r,
+                    technique=technique,
+                    pass_hat=pass_hat,
+                    avg=avg,
+                    obs=obs,
+                    by_task=_rewards_by_task(sims, task_ids),
+                    intervention="I_sku",
+                    graph_diff=[{"op": "catalog-rebind" if sku_w.get("jumped") else "reject", "key": "solve", "note": "pro-0813"}],
+                    eval_file=path,
+                    skipped=skipped,
+                    reward_infos=[
+                        serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
+                    ],
+                    i_sku=sku_w,
+                    apply_scope=apply_scope,
+                    controller=ctrl,
+                )
+            )
+            stop_reason = "catalog-mounted" if sku_w.get("jumped") else "catalog-rejected"
+            break
 
         loop = _sidecar_i_loop(
             sidecar,
@@ -787,8 +903,12 @@ def run_improve(
             break
 
         if loop.get("applied"):
-            intervention = "I_loop"
-            graph_diff = loop.get("graphDiff") or []
+            intervention = "I_loop+I_sku" if sku_w is not None else "I_loop"
+            graph_diff = list(loop.get("graphDiff") or [])
+            if sku_w is not None:
+                graph_diff.append(
+                    {"op": "catalog-rebind" if sku_w.get("jumped") else "reject", "key": "solve", "note": "pro-0813"}
+                )
             technique = str(loop.get("technique") or technique)
             os.environ["VDOM_TAU2_TECHNIQUE"] = technique
         elif weight:
@@ -863,6 +983,8 @@ def run_improve(
                 self_obs_path=self_obs_path,
                 self_obs=self_obs_rec,
                 apply_scope=apply_scope,
+                i_sku=sku_w,
+                controller=ctrl,
             )
         )
         if _saturated(pass_hat):
@@ -872,12 +994,12 @@ def run_improve(
         if not _saturated(pass_hat):
             stop_reason = "budget"
 
-    if weight and i_weight_report is None:
+    if weight and i_weight_report is None and i_sku_report is None:
         from tau2_vdom.agent import TURN_TRACES_BY_TASK
 
         current = _p_hit(pass_hat)
         before = 0.0 if current is None else 0.0
-        # Official slice may have saturated; I_weight still runs on incompletes
+        # Official slice may have saturated; I_weight TrainJob stub still runs on incompletes
         # or the deterministic fixture. Do not invent a new official p_hit.
         w = _run_weight_round(
             sidecar=sidecar,
@@ -944,6 +1066,7 @@ def run_improve(
         "rounds": rounds,
         "servingPaused": serving_paused,
         "iWeight": i_weight_report,
+        "iSku": i_sku_report,
         "skipPolicy": SKIP_POLICY,
         "command": (
             "PYTHONPATH=python python3 -m tau2_vdom.improve"
@@ -951,7 +1074,10 @@ def run_improve(
             + (" --weight" if weight else "")
         ),
     }
-    if weight:
+    if i_sku_report is not None:
+        payload["honestNote"] = I_SKU_NOTE
+        payload["note"] = (note + " " + I_SKU_NOTE).strip()
+    elif weight:
         payload["honestNote"] = I_WEIGHT_NOTE
         payload["note"] = (note + " " + I_WEIGHT_NOTE).strip()
     out = write_improve_report(payload)
@@ -974,6 +1100,19 @@ def run_improve(
         }
         if i_weight_report
         else None,
+        "iSku": {
+            "arm": "I_sku",
+            "kind": "catalog-rebind",
+            "trained": False,
+            "notFineTuning": True,
+            "jumped": bool((i_sku_report or {}).get("jumped")),
+            "mounted": bool((i_sku_report or {}).get("mounted")),
+            "rejected": bool((i_sku_report or {}).get("rejected")),
+            "servingPaused": bool((i_sku_report or {}).get("servingPaused")),
+            "servingModel": (i_sku_report or {}).get("servingModel"),
+        }
+        if i_sku_report
+        else None,
     }, indent=2))
     return out
 
@@ -983,7 +1122,7 @@ def run_weight_fixture_improve(
     trainer: str = "surrogate",
     base_model: str = "surrogate-theta",
 ) -> Path:
-    """I_weight protocol on the deterministic incomplete fixture. No tau2, no API key."""
+    """I_weight TrainJob stub on the deterministic incomplete fixture. Not I_sku."""
     from tau2_vdom.sidecar import default_sidecar
 
     sidecar = default_sidecar()
@@ -1067,7 +1206,7 @@ def run_weight_fixture_improve(
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Closed-loop τ² self-improvement: Obs → I_loop|I_weight → Obs, "
+            "Closed-loop τ² self-improvement: Obs → I_loop|I_sku → Obs, "
             "until pass^k saturates or --max-rounds. Not the 5×4 retail 1.0."
         )
     )
@@ -1092,17 +1231,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--weight",
         action="store_true",
         help=(
-            "After I_loop exhausts (or saturates), spawn the slow-clock trainer "
-            "from incomplete-episode traces. 0731 cannot take an adapter; the "
-            "mount is a surrogate or a reject. Serving is never paused."
+            "On I_sku (hung / crash / no-write), propose catalog rebind to "
+            "deepseek/deepseek-v4-pro-0813 and gate it. Not I_weight-as-trainer "
+            "and not fine-tuning. Serving is never paused. --weight-fixture is "
+            "the I_weight TrainJob stub, not this arm."
         ),
     )
     p.add_argument(
         "--weight-fixture",
         action="store_true",
         help=(
-            "Run only the I_weight protocol on the deterministic incomplete "
-            "fixture (no tau2 slice, no API key)."
+            "Run only the I_weight TrainJob stub on the deterministic incomplete "
+            "fixture (no tau2 slice, no API key). Not I_sku and not a θ jump."
         ),
     )
     return p
@@ -1185,7 +1325,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             if args.weight:
                 print(
-                    "tau2 is not installed; running I_weight on the deterministic "
+                    "tau2 is not installed; running I_weight TrainJob stub on the deterministic "
                     "incomplete fixture (protocol smoke, no live p_hit).",
                     file=sys.stderr,
                 )

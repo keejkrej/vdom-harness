@@ -280,6 +280,128 @@ def serialize_reward_info(reward_info: Any) -> dict[str, Any] | None:
     }
 
 
+_HARD_INCOMPLETE_TERM = re.compile(r"timeout|hung|crash|error", re.I)
+
+
+def called_write_tools(obs: dict[str, Any]) -> bool:
+    return any(a and not str(a).startswith("text:") for a in (obs.get("lastActions") or []))
+
+
+def has_loop_attractor(obs: dict[str, Any]) -> bool:
+    if obs.get("inventedPolicy") or obs.get("refusedCancel"):
+        return True
+    if obs.get("techniqueRecommendation") == "policy-checklist":
+        return True
+    missed = obs.get("missedActions") or []
+    if any(isinstance(a, dict) and a.get("name") for a in missed):
+        return True
+    return any(a in POLICY_WRITE_TOOLS for a in (obs.get("lastActions") or []))
+
+
+def is_incomplete_obs(obs: dict[str, Any]) -> bool:
+    """Hung / timeout / crash / transfer-without-writes / no-write without an attractor."""
+    if obs.get("nSuccessProxy") == 1 and not obs.get("hung"):
+        return False
+    if obs.get("hung"):
+        return True
+    term = str(obs.get("termination") or "").lower()
+    if term and _HARD_INCOMPLETE_TERM.search(term):
+        return True
+    if has_loop_attractor(obs):
+        return False
+    if "transfer" in term:
+        return True
+    if "user_stop" in term:
+        return False
+    if not called_write_tools(obs):
+        return True
+    return False
+
+
+def is_sku_arm(arm: str | None) -> bool:
+    """Official incomplete arm is I_sku. I_catalog / I_weight are prior/stub aliases."""
+    return arm in {"I_sku", "I_catalog", "I_weight"}
+
+
+def intervention_license(obs: dict[str, Any], *, loop_exhausted: bool = False) -> str:
+    """License is hung/incomplete, not pick a pricier model."""
+    if obs.get("hung"):
+        return "hung"
+    if obs.get("nSuccessProxy") == 1:
+        return "hit"
+    if is_incomplete_obs(obs):
+        return "incomplete"
+    if loop_exhausted:
+        return "exhausted"
+    return "attractor"
+
+
+def recommend_intervention(obs: dict[str, Any], *, loop_exhausted: bool = False) -> str:
+    """Hung is first-class here. Hit→wait; hung|crash|no-write→I_sku; attractor→I_loop."""
+    if obs.get("hung"):
+        return "I_sku"
+    if obs.get("nSuccessProxy") == 1:
+        return "wait"
+    if is_incomplete_obs(obs):
+        return "I_sku"
+    if loop_exhausted:
+        return "I_sku"
+    return "I_loop"
+
+
+def recommend_slice_intervention(
+    obs_list: list[dict[str, Any]],
+    *,
+    loop_exhausted: bool = False,
+) -> str:
+    """I_sku if ANY episode is hung or incomplete; wait only if every episode hit."""
+    if any(o.get("hung") for o in obs_list):
+        return "I_sku"
+    if obs_list and all(o.get("nSuccessProxy") == 1 for o in obs_list):
+        return "wait"
+    if any(is_incomplete_obs(o) for o in obs_list):
+        return "I_sku"
+    if loop_exhausted:
+        return "I_sku"
+    return "I_loop"
+
+
+def control_batch(
+    obs_list: list[dict[str, Any]],
+    *,
+    loop_exhausted: bool = False,
+) -> dict[str, Any]:
+    """Landed controller. Applies BOTH buckets; slice alone drops I_loop on mixed 39/44."""
+    from tau2_vdom.improve import apply_scope_from_obs
+
+    episodes = [
+        {
+            "taskId": o.get("taskId"),
+            "hung": bool(o.get("hung")),
+            "arm": recommend_intervention(o, loop_exhausted=loop_exhausted),
+            "license": intervention_license(o, loop_exhausted=loop_exhausted),
+        }
+        for o in obs_list
+    ]
+    scope = apply_scope_from_obs(obs_list)
+    buckets = {str(e["taskId"]): e["arm"] for e in episodes if e.get("taskId")}
+    applied: list[str] = []
+    if scope.get("looped"):
+        applied.append("I_loop")
+    if scope.get("weighted"):
+        applied.append("I_sku")
+    return {
+        "episodes": episodes,
+        "slice": recommend_slice_intervention(obs_list, loop_exhausted=loop_exhausted),
+        "buckets": buckets,
+        "applied": applied,
+        "applyScope": scope,
+        "servingPaused": False,
+        "trained": False,
+        "notFineTuning": True,
+    }
+
+
 def _obs(
     actions: list[dict[str, Any]],
     reward: float | None,
@@ -288,6 +410,7 @@ def _obs(
     hung: bool = False,
     messages: list[Any] | None = None,
     task_id: str | None = None,
+    termination: str | None = None,
 ) -> dict[str, Any]:
     last = [
         a.get("toolName") or f"text:{(a.get('text') or '')[:80]}"
@@ -304,28 +427,38 @@ def _obs(
     recommend_policy = (not p_hit) and (
         refused_cancel or invented_policy or bool(missed_policy)
     )
+    draft = {
+        "nSuccessProxy": p_hit,
+        "lastActions": last,
+        "hung": hung,
+        "termination": termination,
+        "missedActions": missed,
+        "refusedCancel": refused_cancel,
+        "inventedPolicy": invented_policy,
+        "techniqueRecommendation": "policy-checklist" if recommend_policy else None,
+    }
+    arm = recommend_intervention(draft)
     if p_hit:
         critique = "path measure hits S; wait"
-        arm = "wait"
     elif hung:
         critique = "trial hung or skipped; keep task in the set (null reward), retry once"
-        arm = "I_loop"
+    elif is_sku_arm(arm):
+        critique = (
+            "episode incomplete (hung / crash / no-write); I_sku "
+            "(catalog rebind, not fine-tuning)"
+        )
     elif recommend_policy:
         names = ", ".join(a["name"] for a in missed_policy) or "cancel/update"
         critique = (
             f"user asked cancel/update and agent refused or never called the tool "
             f"({names}); I_loop policy-checklist"
         )
-        arm = "I_loop"
     elif failures:
         critique = "tool failures in trajectory; inspect env channel"
-        arm = "I_loop"
     elif repeats:
         critique = "repeat actions; loop mutation or wait"
-        arm = "I_loop"
     else:
         critique = "episode unfinished or miss; inspect cascade / tools"
-        arm = "I_loop"
     return {
         "nSteps": max(len(traces), len(actions)),
         "nSuccessProxy": p_hit,
@@ -339,6 +472,7 @@ def _obs(
         "refusedCancel": refused_cancel,
         "inventedPolicy": invented_policy,
         "hung": hung,
+        "termination": termination,
         "techniqueRecommendation": "policy-checklist" if recommend_policy else None,
         "taskId": str(task_id) if task_id else None,
     }
@@ -408,6 +542,11 @@ def write_eval_file(
                     hung=hung,
                     messages=messages,
                     task_id=str(getattr(sim, "task_id", "") or "") or None,
+                    termination=(
+                        getattr(getattr(sim, "termination_reason", None), "value", None)
+                        or str(getattr(sim, "termination_reason", "") or "")
+                        or None
+                    ),
                 ),
                 "rewardInfo": compact_ri,
                 "hung": hung,

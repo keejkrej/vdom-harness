@@ -36,15 +36,13 @@ export type Trainer = {
 };
 
 /**
- * Two-clock I_weight:
- * - Fast clock: serving continues on old θ. `servingPaused` is always false.
- * - Slow clock: an async trainer consumes traces of incomplete episodes
- *   (transfer / hung / crash / reward 0 with early transfer).
- * - Gate: mount only if a held-out eval does not regress; else keep old θ.
- *
- * 0731 via OpenRouter cannot take an adapter. A successful mount here is a
- * **surrogate θ** (prompt-prefix / logit-bias stand-in) or a FakeTrainer
- * protocol stub — never a claimed 0731 LoRA.
+ * TrainJob / FakeTrainer protocol stub — not the paper slow arm.
+ * The official incomplete arm is I_sku: gated catalog rebind from
+ * deepseek/deepseek-v4-flash-0731 to deepseek/deepseek-v4-pro-0813.
+ * Catalog rebind, not I_weight-as-trainer, not fine-tuning.
+ * FakeTrainer and SurrogateTrainer are not catalog jumps, not LoRA wins,
+ * and must not be logged as 44 trained or as a θ jump.
+ * servingPaused is always false.
  */
 export type TrainJobStatus = "running" | "done" | "failed";
 export type TrainerKind = "fake" | "surrogate";
@@ -95,7 +93,7 @@ const jobs = new Map<string, TrainJob>();
 let jobSeq = 0;
 
 export function isFrozenApiModel(model: string): boolean {
-  return /deepseek-v4-flash-0731|deepseek\/deepseek-v4/i.test(model);
+  return /deepseek-v4-flash-0731/i.test(model);
 }
 
 export function asTrainExample(raw: unknown): TrainExample {
@@ -277,6 +275,7 @@ export class AdaptedProvider implements Provider {
 /**
  * Test / demo trainer: no GPU, no HF Jobs.
  * Emits an AdapterArtifact and registers an AdaptedProvider under resultModelId.
+ * Not a catalog jump and not a claimed LoRA win.
  */
 export class FakeTrainer implements Trainer {
   private seq = 0;
@@ -338,7 +337,7 @@ export class FailingTrainer implements Trainer {
 
 /**
  * File-backed surrogate θ. Prepends a prompt prefix and records a logit-bias
- * stand-in. This is **not** a 0731 finetune and does not raise API-model p_hit.
+ * stand-in. Not a catalog jump, not post-training, and not a 0731/0813 win.
  */
 export class SurrogatePrefixProvider implements Provider {
   name: string;

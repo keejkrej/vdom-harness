@@ -42,6 +42,7 @@ export function observeTau2(opts: {
   toolFailures?: number;
   rewardInfo?: Tau2RewardInfo | null;
   hung?: boolean;
+  termination?: string;
   messages?: Array<{ role?: string; content?: string }>;
   taskId?: string;
 }): Tau2Obs {
@@ -79,6 +80,7 @@ export function observeTau2(opts: {
     inventedPolicy,
     hung,
   };
+  if (opts.termination) obs.termination = opts.termination;
   if (
     pHit !== 1 &&
     shouldRecommendPolicy({

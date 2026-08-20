@@ -10,7 +10,14 @@ from tau2_vdom.improve import (
     pass_hat_k_from_rewards,
 )
 from tau2_vdom.kernel_tools import strip_kernel_self_tools
-from tau2_vdom.runner import _obs, serialize_reward_info
+from tau2_vdom.runner import (
+    HungSimulation,
+    _obs,
+    control_batch,
+    recommend_intervention,
+    recommend_slice_intervention,
+    serialize_reward_info,
+)
 
 
 def test_obs_missed_cancel_recommends_policy() -> None:
@@ -91,7 +98,9 @@ def test_obs_hung_keeps_task() -> None:
     obs = _obs([], None, [], hung=True)
     assert obs["hung"] is True
     assert obs["nSuccessProxy"] == 0
+    assert obs["arm"] == "I_sku"
     assert "null reward" in obs["critique"]
+    assert recommend_intervention(obs) == "I_sku"
 
 
 def test_skipped_task_stays_in_task_phit() -> None:
@@ -177,7 +186,7 @@ def test_apply_scope_mixed_wait_hit() -> None:
             {"taskId": "39", "arm": "I_loop", "nSuccessProxy": 0, "hung": False},
         ]
     )
-    assert scope == {"waitKept": ["44"], "looped": ["39"]}
+    assert scope == {"waitKept": ["44"], "looped": ["39"], "weighted": []}
     record = {"selfObsPath": "self", "applyScope": scope}
     assert record["selfObsPath"] == "self"
     assert record["applyScope"]["waitKept"] == ["44"]
@@ -195,7 +204,13 @@ def test_collect_obs_sets_task_id() -> None:
     )
     miss = SimpleNamespace(
         task_id="39",
-        messages=[],
+        messages=[
+            SimpleNamespace(
+                role="assistant",
+                content="I cannot cancel this economy reservation; a personal reason is not covered.",
+                tool_calls=[],
+            )
+        ],
         hung=False,
         reward_info=SimpleNamespace(reward=0.0),
     )
@@ -204,7 +219,166 @@ def test_collect_obs_sets_task_id() -> None:
     assert obs[0]["arm"] == "wait"
     assert obs[1]["taskId"] == "39"
     assert obs[1]["arm"] == "I_loop"
-    assert apply_scope_from_obs(obs) == {"waitKept": ["44"], "looped": ["39"]}
+    assert apply_scope_from_obs(obs) == {"waitKept": ["44"], "looped": ["39"], "weighted": []}
+
+
+def test_typed_arms_hung_hit_policy() -> None:
+    hung = _obs([], None, [], hung=True)
+    assert hung["arm"] == "I_sku"
+    hung_attractor = _obs(
+        [
+            {
+                "kind": "text",
+                "text": "I cannot cancel this economy reservation; a personal reason is not covered.",
+                "ok": True,
+            }
+        ],
+        0.0,
+        [],
+        hung=True,
+    )
+    assert hung_attractor["inventedPolicy"] is True
+    assert hung_attractor["arm"] == "I_sku"
+    hit = _obs(
+        [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
+        1.0,
+        [],
+        reward_info={"reward": 1.0, "action_checks": []},
+    )
+    assert hit["arm"] == "wait"
+    policy = _obs(
+        [
+            {
+                "kind": "text",
+                "text": "I cannot cancel this economy reservation; a personal reason is not covered.",
+                "ok": True,
+            }
+        ],
+        0.0,
+        [],
+    )
+    assert policy["arm"] == "I_loop"
+    extra = _obs(
+        [
+            {
+                "kind": "tool",
+                "text": "cancel_reservation",
+                "toolName": "cancel_reservation",
+                "toolArgs": {"reservation_id": "OTHER"},
+                "ok": True,
+            }
+        ],
+        0.0,
+        [],
+    )
+    assert extra["arm"] == "I_loop"
+    assert extra["lastActions"] == ["cancel_reservation"]
+    assert "MSJ4OA" not in str(extra)
+    assert recommend_slice_intervention([hit, hung]) == "I_sku"
+    assert recommend_slice_intervention([hit, policy]) == "I_loop"
+    scope = apply_scope_from_obs(
+        [
+            {**hit, "taskId": "44"},
+            {**hung, "taskId": "41"},
+            {**policy, "taskId": "39"},
+        ]
+    )
+    assert scope["waitKept"] == ["44"]
+    assert scope["weighted"] == ["41"]
+    assert scope["looped"] == ["39"]
+
+
+def test_post_gate_39_44_obs_batch() -> None:
+    """ICLR critic required log: post-gate airline 39/44. Hung is first-class."""
+    obs39 = _obs(
+        [
+            {
+                "kind": "text",
+                "text": "I cannot cancel this economy reservation; a personal reason is not covered.",
+                "ok": True,
+            }
+        ],
+        0.0,
+        [],
+        reward_info={"reward": 0.0, "action_checks": [{"action": {"name": "cancel_reservation"}, "action_match": False}]},
+        hung=False,
+        task_id="39",
+        termination="user_stop",
+    )
+    obs44 = _obs([], None, [], hung=True, task_id="44", termination="timeout")
+    assert obs39["taskId"] == "39"
+    assert obs39["arm"] == "I_loop"
+    assert obs39["hung"] is False
+    assert obs39["inventedPolicy"] is True
+    assert recommend_intervention(obs39, loop_exhausted=False) == "I_loop"
+
+    assert obs44["taskId"] == "44"
+    assert obs44["hung"] is True
+    assert obs44["nSuccessProxy"] == 0
+    assert obs44["nSteps"] == 0
+    assert obs44["lastActions"] == []
+    assert obs44["arm"] == "I_sku"
+    assert recommend_intervention(obs44, loop_exhausted=False) == "I_sku"
+    assert recommend_intervention(obs44, loop_exhausted=True) == "I_sku"
+    assert obs44["arm"] != "I_weight"
+    old_rule_44 = "wait" if obs44["nSuccessProxy"] == 1 else "I_loop"
+    assert old_rule_44 == "I_loop"
+    assert obs44["arm"] != old_rule_44
+    assert recommend_intervention(obs44, loop_exhausted=False) != "I_loop"
+
+    from types import SimpleNamespace
+
+    sim39 = SimpleNamespace(
+        task_id="39",
+        messages=[
+            SimpleNamespace(
+                role="assistant",
+                content="I cannot cancel this economy reservation; a personal reason is not covered.",
+                tool_calls=[],
+            )
+        ],
+        hung=False,
+        reward_info=SimpleNamespace(reward=0.0),
+        termination_reason="user_stop",
+    )
+    batch = _collect_obs([sim39, HungSimulation("44", 0, "timeout")])
+    assert [o["taskId"] for o in batch] == ["39", "44"]
+    assert batch[0]["arm"] == "I_loop"
+    assert batch[1]["arm"] == "I_sku"
+    assert batch[1]["hung"] is True
+    assert batch[1]["nSteps"] == 0
+    scope = apply_scope_from_obs(batch)
+    assert scope["waitKept"] == []
+    assert scope["looped"] == ["39"]
+    assert scope["weighted"] == ["44"]
+    assert recommend_slice_intervention(batch, loop_exhausted=False) == "I_sku"
+    ctrl = control_batch(batch, loop_exhausted=False)
+    assert ctrl["episodes"][0]["arm"] == "I_loop"
+    assert ctrl["episodes"][1]["arm"] == "I_sku"
+    assert ctrl["episodes"][1]["hung"] is True
+    assert ctrl["episodes"][1]["license"] == "hung"
+    assert ctrl["slice"] == "I_sku"
+    assert ctrl["buckets"]["39"] == "I_loop"
+    assert ctrl["buckets"]["44"] == "I_sku"
+    assert ctrl["applied"] == ["I_loop", "I_sku"]
+    assert not (
+        ctrl["slice"] == "I_sku"
+        and "I_loop" not in ctrl["applied"]
+        and "39" in ctrl["applyScope"]["looped"]
+    ), "if only slice is consumed, 39 I_loop is dropped"
+    assert ctrl["applyScope"]["waitKept"] == []
+    assert ctrl["servingPaused"] is False
+    assert ctrl["trained"] is False
+    blob = " ".join(str(o.get("lastActions")) for o in batch)
+    assert "MSJ4OA" not in blob
+    assert "S61CZX" not in blob
+    from tau2_vdom.improve import CATALOG_JUMP_MODEL, I_SKU_NOTE
+
+    assert "catalog rebind" in I_SKU_NOTE
+    assert "not fine-tuning" in I_SKU_NOTE
+    assert "not pick a pricier model" in I_SKU_NOTE
+    assert "0813 existing is not a gate" in I_SKU_NOTE
+    assert CATALOG_JUMP_MODEL == "deepseek/deepseek-v4-pro-0813"
 
 
 def test_hit_still_waits() -> None:
@@ -223,6 +397,7 @@ def main() -> int:
         test_obs_missed_cancel_recommends_policy,
         test_obs_mock_update_does_not_select_policy,
         test_obs_hung_keeps_task,
+        test_typed_arms_hung_hit_policy,
         test_skipped_task_stays_in_task_phit,
         test_obs_personal_reason_is_invented_policy,
         test_missed_tool_names_only_drops_gold_ids,
@@ -230,6 +405,7 @@ def main() -> int:
         test_obs_includes_task_id,
         test_apply_scope_mixed_wait_hit,
         test_collect_obs_sets_task_id,
+        test_post_gate_39_44_obs_batch,
         test_hit_still_waits,
     ]
     failed = 0

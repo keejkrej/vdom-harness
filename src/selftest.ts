@@ -52,7 +52,7 @@ import {
   unmountAdapterOnFailure,
   mountedImprovementKeys,
 } from "./lifecycle.js";
-import { improveLoop } from "./improve.js";
+import { improveLoop, pickMode, tracesLookIncomplete } from "./improve.js";
 
 let passed = 0;
 let failed = 0;
@@ -604,6 +604,10 @@ async function testTwoClockTrainJob(): Promise<void> {
   );
   assertEq(gated?.gate?.action, "reject", "honest reject recorded");
   assertEq(gated?.servingPaused, false, "gate never pauses serve");
+  assert(
+    !String(done.artifact?.resultModelId ?? "").includes("deepseek-v4-pro-0813"),
+    "FakeTrainer is not a catalog jump",
+  );
 
   const sjob = spawnTrainJob({
     trainer: new SurrogateTrainer(),
@@ -621,6 +625,28 @@ async function testTwoClockTrainJob(): Promise<void> {
   assert(isFrozenApiModel(FROZEN_API_MODEL), "0731 is the frozen API model");
   clearTrainJobs();
   resetImprovementFixtures();
+}
+
+async function testPickModeConsultsIncompleteTraces(): Promise<void> {
+  assertEq(pickMode("topology", 0, []), "topology", "explicit topology is not rewritten");
+  assertEq(pickMode("auto", 0, []), "capability", "auto iter 0 is still capability");
+  assertEq(pickMode("auto", 1, []), "adapter", "auto iter 1 is still adapter");
+  assertEq(pickMode("auto", 2, []), "topology", "auto iter 2+ is still topology");
+  assertEq(tracesLookIncomplete([]), false, "empty traces are not incomplete");
+  const incomplete = [
+    {
+      nodeKey: "solve",
+      role: "solve",
+      input: "finish the episode",
+      output: "transfer_to_human_agents",
+      ts: 1,
+      hung: true,
+      reason: "hung",
+    },
+  ];
+  assertEq(tracesLookIncomplete(incomplete), true, "hung / transfer traces look incomplete");
+  assertEq(pickMode("auto", 0, incomplete), "adapter", "auto + incomplete traces → adapter / I_sku");
+  assertEq(pickMode("capability", 0, incomplete), "capability", "explicit capability ignores traces");
 }
 
 async function testHfExtensionDoc(): Promise<void> {
@@ -644,6 +670,7 @@ async function main(): Promise<void> {
     ["adapter fail eval→unmount/rollback", testAdapterRollback],
     ["improveLoop capability path", testImproveLoopCapability],
     ["two-clock I_weight TrainJob", testTwoClockTrainJob],
+    ["pickMode auto consults incomplete traces", testPickModeConsultsIncompleteTraces],
     ["HF Jobs extension docs", testHfExtensionDoc],
   ];
 

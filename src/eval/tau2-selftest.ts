@@ -1,11 +1,14 @@
 import {
   DEFAULT_OPENROUTER_MODEL,
   DeterministicProvider,
+  registerProvider,
   resolveChatConfig,
   scriptedTau2MockTurn,
   type Message,
   type Provider,
 } from "../providers.js";
+import { RuntimeDOM } from "../reconciler.js";
+import { findNode } from "../ir.js";
 import { runTau2Turn } from "./tau2-turn.js";
 import { observeTau2, actionFromCompletion, markRepeats } from "./tau2-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
@@ -17,6 +20,7 @@ import {
   graphHas,
   loopExhausted,
   obsNeedsPolicy,
+  isIncompleteEpisode,
   recommendIntervention,
   recommendSliceIntervention,
   REFUSED_GLOBAL_ILOOP,
@@ -27,6 +31,22 @@ import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.j
 import { GOLD_RESERVATION_IDS, hasGoldReservationId, serializeKernelC } from "./tau2-kernel.js";
 import { formatSelfObsUser, runSelfObs, SELF_OBS_SYSTEM, SELF_OBS_WAIT_HIT_RULES } from "./tau2-self-obs.js";
 import { type Tau2Obs } from "./tau2-types.js";
+import {
+  CONTROLLER_NOTE,
+  appliedFromScope,
+  controlBatch,
+  servingModelForTask,
+} from "./tau2-control.js";
+import {
+  applyISku,
+  CATALOG_JUMP_MODEL,
+  CATALOG_JUMP_NOTE,
+  proposeCatalogJump,
+  SERVING_MODEL,
+  servingModelOfGraph,
+  servingProviderAfterJump,
+  thetaJumped,
+} from "./tau2-weight.js";
 
 let passed = 0;
 let failed = 0;
@@ -301,10 +321,28 @@ async function testILoopAndWeightGate(): Promise<void> {
   assertEq(rejectDown.action, "reject", "I_weight rejects when after < before");
 
   const sliceMiss = recommendSliceIntervention([
-    { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
-    { nSteps: 1, nSuccessProxy: 0, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
+    {
+      nSteps: 1,
+      nSuccessProxy: 1,
+      lastActions: ["update_task_status"],
+      channels: ["env"],
+      critique: "",
+      toolFailures: 0,
+      repeatActions: 0,
+      hung: false,
+    },
+    {
+      nSteps: 1,
+      nSuccessProxy: 0,
+      lastActions: ["create_task"],
+      channels: ["env"],
+      critique: "",
+      toolFailures: 0,
+      repeatActions: 0,
+      hung: false,
+    },
   ]);
-  assertEq(sliceMiss, "I_loop", "mixed slice still emits I_loop");
+  assertEq(sliceMiss, "I_loop", "mixed completed-miss slice still emits I_loop");
   const sliceDone = recommendSliceIntervention([
     { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
     { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
@@ -314,7 +352,7 @@ async function testILoopAndWeightGate(): Promise<void> {
     [{ nSteps: 1, nSuccessProxy: 0, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 }],
     { loopExhausted: true },
   );
-  assertEq(sliceWeight, "I_weight", "exhausted loop + miss → I_weight");
+  assertEq(sliceWeight, "I_sku", "exhausted loop + miss → I_sku");
 }
 
 async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
@@ -349,7 +387,7 @@ async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
   assertEq(obs.refusedCancel, true, "refusedCancel from assistant text");
   assertEq(obs.inventedPolicy, true, "inventedPolicy from no-show / no way");
   assertEq(obs.techniqueRecommendation, "policy-checklist", "arm recommends policy technique");
-  assertEq(obs.arm, "I_loop", "typed miss is still I_loop, not I_weight");
+  assertEq(obs.arm, "I_loop", "typed miss is still I_loop, not I_sku");
   assert(obs.critique.includes("policy-checklist"), "critique names policy-checklist");
   assertEq(shouldRecommendPolicy(obs), true, "shouldRecommendPolicy on cancel miss");
   assertEq(obsNeedsPolicy(obs), true, "obsNeedsPolicy true");
@@ -375,7 +413,9 @@ async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
   });
   assertEq(hung.hung, true, "hung feature");
   assertEq(hung.nSuccessProxy, 0, "hung is not a hit");
+  assertEq(hung.arm, "I_sku", "hung licenses I_sku, not I_loop");
   assert(hung.critique.includes("null reward"), "hung critique keeps the task in the set");
+  assertEq(isIncompleteEpisode(hung), true, "hung is incomplete");
 
   const policy = applyILoop(undefined, obs);
   assertEq(policy.applied, true, "I_loop applies policy graph on refusedCancel");
@@ -972,6 +1012,369 @@ async function testSelfObsPromptHasEpisodesNoGoldIds(): Promise<void> {
   const scope = computeApplyScope([waitHitObs("44"), missCancelObs("39")]);
   assertEq(scope.waitKept.join(","), "44", "computeApplyScope waitKept");
   assertEq(scope.looped.join(","), "39", "computeApplyScope looped");
+  assertEq(scope.weighted.join(","), "", "mixed wait+policy-miss has no weighted bucket");
+}
+
+function hungObs(taskId: string): Tau2Obs {
+  return {
+    taskId,
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "trial hung or skipped; keep task in the set (null reward), retry once",
+    toolFailures: 0,
+    repeatActions: 0,
+    arm: "I_sku",
+    hung: true,
+    termination: "timeout",
+  };
+}
+
+async function testTypedInterventionArms(): Promise<void> {
+  const hung = recommendIntervention({
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: true,
+  });
+  assertEq(hung, "I_sku", "hung ⇒ I_sku");
+  const hungAttractor = recommendIntervention({
+    nSteps: 2,
+    nSuccessProxy: 0,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: true,
+    inventedPolicy: true,
+    refusedCancel: true,
+  });
+  assertEq(hungAttractor, "I_sku", "hung wins over a loop attractor; hung is not ignored");
+
+  const timeout = recommendIntervention({
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+    termination: "timeout",
+  });
+  assertEq(timeout, "I_sku", "timeout ⇒ I_sku");
+
+  const noWrite = recommendIntervention({
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+  });
+  assertEq(noWrite, "I_sku", "no-write miss ⇒ I_sku");
+
+  const completedEmpty = recommendIntervention({
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+    termination: "user_stop",
+  });
+  assertEq(completedEmpty, "I_loop", "completed user_stop miss is I_loop even with empty lastActions");
+
+  const hit = recommendIntervention({
+    nSteps: 2,
+    nSuccessProxy: 1,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+  });
+  assertEq(hit, "wait", "hit ⇒ wait");
+
+  const policyMiss = recommendIntervention({
+    nSteps: 3,
+    nSuccessProxy: 0,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+    refusedCancel: true,
+    inventedPolicy: true,
+    techniqueRecommendation: "policy-checklist",
+  });
+  assertEq(policyMiss, "I_loop", "completed policy miss ⇒ I_loop");
+
+  const extraWrite = recommendIntervention({
+    nSteps: 2,
+    nSuccessProxy: 0,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+  });
+  assertEq(extraWrite, "I_loop", "completed extra-write attractor ⇒ I_loop");
+
+  const sliceHung = recommendSliceIntervention([waitHitObs("44"), hungObs("41")]);
+  assertEq(sliceHung, "I_sku", "any incomplete episode ⇒ slice I_sku, not I_loop");
+
+  const slicePolicy = recommendSliceIntervention([waitHitObs("44"), missCancelObs("39")]);
+  assertEq(slicePolicy, "I_loop", "completed policy miss in mixed slice still I_loop");
+
+  const scope = computeApplyScope([waitHitObs("44"), hungObs("41"), missCancelObs("39")]);
+  assertEq(scope.waitKept.join(","), "44", "wait-hit stays waitKept");
+  assertEq(scope.weighted.join(","), "41", "hung goes to weighted / incomplete bucket");
+  assertEq(scope.looped.join(","), "39", "completed policy miss stays looped");
+  const waitGraph = graphForScopedTask(tau2Graph("one-shot"), tau2Graph("self-refine"), scope, "41");
+  assert(!graphHas(waitGraph, "critic"), "weighted / incomplete keeps C0");
+  const hungPrompt = formatSelfObsUser({ graph: tau2Graph("one-shot"), obs: [hungObs("41")] });
+  assert(hungPrompt.includes("arm=I_sku"), "prompt lists I_sku for hung");
+  assert(!hasGoldReservationId(hungPrompt), "hung prompt has no gold reservation IDs");
+  const hungLoop = applyILoop(tau2Graph("one-shot"), hungObs("41"));
+  assertEq(hungLoop.applied, false, "I_loop does not apply to hung-only");
+  assertEq(hungLoop.applyScope?.weighted.join(","), "41", "hung-only applyScope is weighted");
+}
+
+/** ICLR critic required log: post-gate airline 39/44 obs batch. */
+async function testPostGate3944Replay(): Promise<void> {
+  const obs39 = observeTau2({
+    traces: [],
+    taskId: "39",
+    reward: 0,
+    hung: false,
+    actions: [
+      {
+        kind: "text",
+        text: "I cannot cancel this economy reservation; a personal reason is not covered.",
+      },
+    ],
+    rewardInfo: {
+      reward: 0,
+      action_checks: [{ action: { name: "cancel_reservation" }, action_match: false }],
+    },
+  });
+  const obs44 = observeTau2({
+    traces: [],
+    taskId: "44",
+    reward: null,
+    hung: true,
+    termination: "timeout",
+    actions: [],
+  });
+
+  assertEq(obs39.taskId, "39", "replay task 39");
+  assertEq(obs39.hung, false, "39 completed");
+  assertEq(obs39.inventedPolicy, true, "39 policy attractor");
+  assertEq(obs39.refusedCancel, true, "39 refused cancel");
+  assertEq(obs39.arm, "I_loop", "39 completed policy miss → I_loop");
+  assertEq(
+    recommendIntervention(obs39, { loopExhausted: false }),
+    "I_loop",
+    "39 stays I_loop when the loop is not exhausted",
+  );
+
+  assertEq(obs44.taskId, "44", "replay task 44");
+  assertEq(obs44.hung, true, "44 hung is a first-class predicate");
+  assertEq(obs44.nSuccessProxy, 0, "44 hung is not a hit");
+  assertEq(obs44.nSteps, 0, "44 nmsg 0");
+  assertEq(obs44.lastActions.length, 0, "44 no writes / no messages");
+  assertEq(obs44.arm, "I_sku", "44 hung/timeout → I_sku (slow arm), not trained");
+  assertEq(
+    recommendIntervention(obs44, { loopExhausted: false }),
+    "I_sku",
+    "hung 44 is I_sku even when loopExhausted is false",
+  );
+  assertEq(
+    recommendIntervention(obs44, { loopExhausted: true }),
+    "I_sku",
+    "hung 44 is still I_sku when the loop is exhausted",
+  );
+  assert(obs44.arm !== "I_weight", "44 log is catalog-rebind / I_sku, not I_weight-as-trainer");
+  const oldRule44: "wait" | "I_loop" | "I_weight" | "I_sku" =
+    obs44.nSuccessProxy === 1 ? "wait" : "I_loop";
+  assertEq(oldRule44, "I_loop", "sanity: pre-thesis rule I_loop-until-exhausted would pick I_loop for 44");
+  assert(
+    obs44.arm !== oldRule44,
+    "if 44 is I_loop unless loopExhausted, this test must fail",
+  );
+
+  const scope = computeApplyScope([obs39, obs44]);
+  assertEq(scope.waitKept.join(","), "", "post-gate 39/44 waitKept=[]");
+  assertEq(scope.looped.join(","), "39", "39 is looped");
+  assertEq(scope.weighted.join(","), "44", "44 is weighted / incomplete");
+  assertEq(
+    recommendSliceIntervention([obs39, obs44], { loopExhausted: false }),
+    "I_sku",
+    "slice prefers I_sku because 44 is hung, not I_loop-until-exhausted",
+  );
+
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const omit = controlBatch([obs39, obs44], { loopExhausted: false, graph: start });
+  assertEq(omit.episodes[0]?.arm, "I_loop", "controller: 39 I_loop");
+  assertEq(omit.episodes[0]?.license, "attractor", "39 licensed by completed attractor");
+  assertEq(omit.episodes[1]?.arm, "I_sku", "controller: 44 I_sku");
+  assertEq(omit.episodes[1]?.hung, true, "controller reads hung on 44");
+  assertEq(omit.episodes[1]?.license, "hung", "44 licensed by hung, not a pricier model");
+  assertEq(omit.slice, "I_sku", "mixed slice is I_sku because 44 hung");
+  assertEq(omit.buckets["39"], "I_loop", "bucket 39 is I_loop");
+  assertEq(omit.buckets["44"], "I_sku", "bucket 44 is I_sku");
+  assertEq(omit.applyScope.waitKept.join(","), "", "controller waitKept=[]");
+  assertEq(omit.applyScope.looped.join(","), "39", "controller 39 looped");
+  assertEq(omit.applyScope.weighted.join(","), "44", "controller 44 weighted");
+  assert(
+    omit.applied.includes("I_loop") && omit.applied.includes("I_sku"),
+    "improve path applies BOTH buckets",
+  );
+  assert(
+    !(omit.slice === "I_sku" && !omit.applied.includes("I_loop") && omit.applyScope.looped.includes("39")),
+    "if only slice is consumed, 39 I_loop is dropped and this test fails",
+  );
+  assertEq(
+    appliedFromScope(omit.applyScope).join("+"),
+    "I_loop+I_sku",
+    "appliedFromScope reads buckets, not slice",
+  );
+  assertEq(omit.loop?.applied, true, "39 I_loop actually applied (C1)");
+  assert(omit.graphC1 != null && graphHas(omit.graphC1, "policy-checklist"), "39 C1 is the loop graph");
+  assertEq(omit.proposal?.model, CATALOG_JUMP_MODEL, "slow arm proposes pro-0813");
+  assertEq(omit.gate?.action, "reject", "omit after-eval → reject; 0813 existing is not a gate");
+  assert(omit.gate?.reason.includes("measured after-eval"), "gate names the missing eval");
+  assertEq(omit.servingPaused, false, "controller never pauses serve");
+  assertEq(omit.trained, false, "44 did not train");
+  assert(CONTROLLER_NOTE.includes("hung/incomplete"), "controller license is hung/incomplete");
+  assert(CONTROLLER_NOTE.includes("BOTH buckets"), "controller note names both buckets");
+
+  const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, new DeterministicProvider(SERVING_MODEL));
+  const before = 0;
+  const after = before + 1e-6; // fixture ε, not airline p_hit(0813)>p_hit(0731)
+  const mounted = controlBatch([obs39, obs44], {
+    loopExhausted: false,
+    graph: start,
+    before,
+    after,
+    provider: mock0813,
+  });
+  assertEq(mounted.gate?.action, "mount", "fixture after=before+ε may mount");
+  assertEq(mounted.servingPaused, false, "mount never pauses serve");
+  assertEq(mounted.trained, false, "mount is not a train");
+  assertEq(servingModelForTask(mounted, "44"), CATALOG_JUMP_MODEL, "44 serving model id is 0813 after fixture mount");
+  assertEq(servingModelForTask(mounted, "39"), SERVING_MODEL, "39 C1 stays on base SKU 0731");
+  assertEq(mounted.applyScope.waitKept.join(","), "", "fixture mount waitKept=[]");
+
+  const slow = proposeCatalogJump();
+  assertEq(slow.arm, "I_sku", "slow-arm proposal is I_sku");
+  assertEq(slow.kind, "catalog-rebind", "44 log is catalog-rebind, not a train");
+  assertEq(slow.model, CATALOG_JUMP_MODEL, "slow arm proposes pro-0813");
+  assertEq(slow.trained, false, "44 did not train");
+  assertEq(slow.servingPaused, false, "catalog-rebind never pauses serve");
+  assert(CATALOG_JUMP_NOTE.includes("catalog rebind"), "honest catalog rebind label");
+  assert(CATALOG_JUMP_NOTE.includes("not fine-tuning"), "does not claim fine-tuning");
+  assert(CATALOG_JUMP_NOTE.includes("0813 existing is not a gate"), "existence is not a gate");
+
+  const prompt = formatSelfObsUser({ graph: tau2Graph("one-shot"), obs: [obs39, obs44] });
+  assert(prompt.includes("taskId=39"), "replay prompt lists 39");
+  assert(prompt.includes("taskId=44"), "replay prompt lists 44");
+  assert(prompt.includes("arm=I_loop"), "replay prompt lists I_loop");
+  assert(prompt.includes("arm=I_sku"), "replay prompt lists I_sku");
+  assert(!prompt.includes("arm=I_weight"), "replay prompt does not claim 44 trained via I_weight");
+  assert(!hasGoldReservationId(prompt), "replay prompt has no gold reservation IDs");
+}
+
+async function testCatalogJumpMounts0813(): Promise<void> {
+  const proposal = proposeCatalogJump();
+  assertEq(proposal.arm, "I_sku", "slow arm is I_sku, not I_weight-as-trainer");
+  assertEq(proposal.kind, "catalog-rebind", "I_sku proposes a catalog-rebind, not a LoRA");
+  assertEq(proposal.model, CATALOG_JUMP_MODEL, "proposal model is pro-0813");
+  assertEq(proposal.trained, false, "catalog-rebind is not a train");
+  assertEq(proposal.notFineTuning, true, "does not claim fine-tuning");
+  assertEq(proposal.servingPaused, false, "proposal never pauses serve");
+  assert(CATALOG_JUMP_NOTE.includes("catalog rebind"), "honest catalog rebind label");
+  assert(CATALOG_JUMP_NOTE.includes("not fine-tuning"), "does not claim fine-tuning");
+
+  const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
+  const mock0731 = new DeterministicProvider(SERVING_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, mock0731);
+
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const dom = new RuntimeDOM();
+  dom.reconcile(start);
+  assertEq(servingModelOfGraph(start), SERVING_MODEL, "pre-gate serving is 0731");
+  assertEq(dom.current.get("solve")?.provider?.model, SERVING_MODEL, "PhysicalNode bound to 0731");
+
+  const noEval = applyISku({
+    graph: start,
+    before: 0,
+    provider: mock0813,
+    dom,
+  });
+  assertEq(noEval.action, "reject", "no after-eval rejects");
+  assertEq(noEval.jumped, false, "0813 existing is not a jump");
+  assert(noEval.reason.includes("0813 existing is not a gate"), "existence is not a gate");
+  assertEq(servingModelOfGraph(noEval.graph), SERVING_MODEL, "no-eval keeps 0731");
+
+  const reject = applyISku({
+    graph: start,
+    before: 1,
+    after: 0,
+    provider: mock0813,
+    dom,
+  });
+  assertEq(reject.action, "reject", "rejected gate is a negative");
+  assertEq(reject.arm, "I_sku", "reject is still the I_sku arm");
+  assertEq(reject.kind, "catalog-rebind", "reject log is catalog-rebind");
+  assertEq(reject.trained, false, "reject did not train");
+  assertEq(reject.servingPaused, false, "reject never pauses serve");
+  assertEq(reject.jumped, false, "reject is not a jump");
+  assertEq(thetaJumped(reject), false, "thetaJumped false on reject");
+  assertEq(servingModelOfGraph(reject.graph), SERVING_MODEL, "reject keeps 0731");
+  assertEq(findNode(reject.graph, "solve")?.model, SERVING_MODEL, "reject n.model stays 0731");
+
+  const mount = applyISku({
+    graph: start,
+    before: 0,
+    after: 1,
+    provider: mock0813,
+    dom,
+  });
+  assertEq(mount.action, "mount", "gate=mount");
+  assertEq(mount.arm, "I_sku", "mount is I_sku, not I_weight-as-trainer");
+  assertEq(mount.kind, "catalog-rebind", "mount log is catalog-rebind");
+  assertEq(mount.trained, false, "catalog-rebind is not a train");
+  assertEq(mount.servingPaused, false, "mount never pauses serve");
+  assertEq(mount.jumped, true, "mount is a catalog jump");
+  assertEq(thetaJumped(mount), true, "θ jumped only on mount + 0813");
+  assertEq(servingModelOfGraph(mount.graph), CATALOG_JUMP_MODEL, "post-mount serving model id is 0813");
+  assertEq(findNode(mount.graph, "solve")?.model, CATALOG_JUMP_MODEL, "n.model rebound to 0813");
+  assertEq(
+    dom.current.get("solve")?.provider?.model,
+    CATALOG_JUMP_MODEL,
+    "PhysicalNode.provider rebound to 0813",
+  );
+  const later = servingProviderAfterJump(mount.graph, mock0731, dom);
+  assertEq(later.model, CATALOG_JUMP_MODEL, "later serving step uses 0813, not 0731");
+  assert(later !== mock0731, "later step is not the 0731 client");
 }
 
 async function testWordReverseUntouched(): Promise<void> {
@@ -1006,6 +1409,9 @@ async function main(): Promise<void> {
     ["all-miss valid self I_loop still applies", testAllMissSelfILoopStillApplies],
     ["host applyILoop fallback uses the wait-hit gate", testApplyILoopFallbackWaitHitGate],
     ["self-Obs prompt has per-episode arms and no gold IDs", testSelfObsPromptHasEpisodesNoGoldIds],
+    ["typed arms: hung I_sku / hit wait / policy I_loop", testTypedInterventionArms],
+    ["post-gate 39/44 replay: 39 I_loop, hung 44 I_sku, waitKept=[]", testPostGate3944Replay],
+    ["I_sku catalog-rebind mounts 0813 (mocked bind, not LoRA)", testCatalogJumpMounts0813],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

@@ -7,11 +7,16 @@ import {
 import { reconcile, type ReconcileOp } from "../reconciler.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { type ApplyScope, type Tau2Obs, type Tau2Technique } from "./tau2-types.js";
-import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.js";
+import { AIRLINE_POLICY_CHECKLIST, isPolicyWriteTool, shouldRecommendPolicy } from "./tau2-policy.js";
 
 export type { ApplyScope } from "./tau2-types.js";
 
-export type InterventionArm = "I_loop" | "I_weight" | "wait";
+/** Official incomplete / hung arm is I_sku (catalog rebind). I_weight is a trainer stub only. */
+export type InterventionArm = "I_loop" | "I_sku" | "wait";
+
+export function isSkuArm(arm: string | undefined): boolean {
+  return arm === "I_sku" || arm === "I_catalog" || arm === "I_weight";
+}
 
 export const REFUSED_GLOBAL_ILOOP = "refused global I_loop: wait-hit in batch";
 
@@ -37,6 +42,7 @@ export type ILoopResult = {
   applyScope?: ApplyScope;
 };
 
+/** FakeTrainer / TrainJob eval gate. Not the paper slow arm and not a θ jump. */
 export type WeightGateDecision = {
   arm: "I_weight";
   action: "mount" | "reject";
@@ -52,6 +58,37 @@ export function graphHas(g: AgentGraph, key: string): boolean {
 function asObsList(obs?: Tau2Obs | Tau2Obs[] | null): Tau2Obs[] {
   if (!obs) return [];
   return Array.isArray(obs) ? obs : [obs];
+}
+
+const HARD_INCOMPLETE_TERM = /timeout|hung|crash|error/;
+
+/** Env / write tool names in lastActions (text:… is not a write). */
+export function calledWriteTools(obs: Tau2Obs): boolean {
+  return (obs.lastActions ?? []).some((a) => Boolean(a) && !a.startsWith("text:"));
+}
+
+/** Completed-miss topology / policy attractor (not incompleteness). */
+export function hasLoopAttractor(obs: Tau2Obs): boolean {
+  if (obs.inventedPolicy || obs.refusedCancel) return true;
+  if (shouldRecommendPolicy(obs)) return true;
+  if ((obs.missedActions ?? []).length > 0) return true;
+  return (obs.lastActions ?? []).some((a) => isPolicyWriteTool(a));
+}
+
+/**
+ * Episode did not complete: hang, timeout, crash, transfer-without-writes,
+ * or no-write without a diagnosed missed-tool / policy attractor.
+ */
+export function isIncompleteEpisode(obs: Tau2Obs): boolean {
+  if (obs.nSuccessProxy === 1 && !obs.hung) return false;
+  if (obs.hung) return true;
+  const term = (obs.termination ?? "").toLowerCase();
+  if (term && HARD_INCOMPLETE_TERM.test(term)) return true;
+  if (hasLoopAttractor(obs)) return false;
+  if (term.includes("transfer")) return true;
+  if (term.includes("user_stop")) return false;
+  if (!calledWriteTools(obs)) return true;
+  return false;
 }
 
 /** Wait + official hit. Hung is never a hit. */
@@ -70,8 +107,9 @@ export function episodeTaskId(obs: Tau2Obs, index: number, taskIds?: string[]): 
 }
 
 /**
- * Split a batch so a global C mutation cannot land on wait+hit episodes.
- * Optional patchTaskIds scopes C1 further (wait-hit is never included).
+ * Split a batch so a global C mutation cannot land on wait+hit or I_sku
+ * (incomplete) episodes. Optional patchTaskIds scopes C1 further (wait-hit
+ * and incomplete are never included).
  */
 export function computeApplyScope(
   obs?: Tau2Obs | Tau2Obs[] | null,
@@ -88,9 +126,20 @@ export function computeApplyScope(
   const scoped = (opts?.patchTaskIds ?? []).filter((id) => id.length > 0);
   const waitKept: string[] = [];
   const looped: string[] = [];
+  const weighted: string[] = [];
+  const incomplete = new Set<string>();
+  for (let i = 0; i < list.length; i++) {
+    const o = list[i]!;
+    const id = episodeTaskId(o, i, opts?.taskIds);
+    if (isIncompleteEpisode(o) && !hits.has(id)) incomplete.add(id);
+  }
   for (const id of order) {
     if (hits.has(id)) {
       waitKept.push(id);
+      continue;
+    }
+    if (incomplete.has(id)) {
+      weighted.push(id);
       continue;
     }
     if (scoped.length > 0 && !scoped.includes(id)) {
@@ -99,16 +148,18 @@ export function computeApplyScope(
     }
     looped.push(id);
   }
-  return { waitKept, looped };
+  return { waitKept, looped, weighted };
 }
 
 export function graphsByApplyScope(
   graphBefore: AgentGraph,
   graphAfter: AgentGraph,
   scope: ApplyScope,
+  graphSku?: AgentGraph,
 ): Record<string, AgentGraph> {
   const out: Record<string, AgentGraph> = {};
   for (const id of scope.waitKept) out[id] = graphBefore;
+  for (const id of scope.weighted ?? []) out[id] = graphSku ?? graphBefore;
   for (const id of scope.looped) out[id] = graphAfter;
   return out;
 }
@@ -118,10 +169,14 @@ export function graphForScopedTask(
   graphAfter: AgentGraph,
   scope: ApplyScope,
   taskId: string,
+  graphSku?: AgentGraph,
 ): AgentGraph {
   if (scope.waitKept.includes(taskId)) return graphBefore;
+  // SKU is a sibling serving graph for the weighted bucket. If omitted, isolation
+  // would serve unrebound C0 and swallow I_sku — callers must pass graphSku after a mount.
+  if ((scope.weighted ?? []).includes(taskId)) return graphSku ?? graphBefore;
   if (scope.looped.includes(taskId)) return graphAfter;
-  if (scope.waitKept.length > 0) return graphBefore;
+  if (scope.waitKept.length > 0 || (scope.weighted ?? []).length > 0) return graphBefore;
   return graphAfter;
 }
 
@@ -132,15 +187,18 @@ export function selectServingGraph(opts: {
   currentGraph: AgentGraph;
   graphBefore: AgentGraph;
   graphAfter?: AgentGraph;
+  /** Sibling I_sku graph. Weighted tasks use this so C0 isolation cannot swallow 0813. */
+  graphSku?: AgentGraph;
   applyScope?: ApplyScope;
 }): AgentGraph {
   if (opts.reqGraph) return opts.reqGraph;
   const scope = opts.applyScope;
   if (opts.taskId && scope) {
     if (scope.waitKept.includes(opts.taskId)) return opts.graphBefore;
+    if ((scope.weighted ?? []).includes(opts.taskId)) return opts.graphSku ?? opts.graphBefore;
     if (scope.looped.includes(opts.taskId) && opts.graphAfter) return opts.graphAfter;
   }
-  if (scope && scope.waitKept.length > 0) return opts.graphBefore;
+  if (scope && (scope.waitKept.length > 0 || (scope.weighted ?? []).length > 0)) return opts.graphBefore;
   return opts.currentGraph;
 }
 
@@ -157,8 +215,14 @@ export function servingTechnique(
   const scoped =
     Boolean(opts.taskId) &&
     Boolean(scope) &&
-    (scope!.waitKept.includes(opts.taskId!) || scope!.looped.includes(opts.taskId!));
-  if (scoped || live.meta?.selfEdit === true || (scope && scope.waitKept.length > 0 && !opts.taskId)) {
+    (scope!.waitKept.includes(opts.taskId!) ||
+      scope!.looped.includes(opts.taskId!) ||
+      (scope!.weighted ?? []).includes(opts.taskId!));
+  if (
+    scoped ||
+    live.meta?.selfEdit === true ||
+    (scope && (scope.waitKept.length > 0 || (scope.weighted ?? []).length > 0) && !opts.taskId)
+  ) {
     return techniqueOfGraph(live);
   }
   return opts.reqTechnique ?? opts.currentTechnique;
@@ -173,25 +237,53 @@ export function loopExhausted(g: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): boolean
 export function obsNeedsPolicy(obs?: Tau2Obs | Tau2Obs[] | null): boolean {
   if (!obs) return false;
   const list = asObsList(obs);
-  return list.some((o) => !isWaitHit(o) && shouldRecommendPolicy(o));
+  return list.some((o) => !isWaitHit(o) && !isIncompleteEpisode(o) && shouldRecommendPolicy(o));
 }
 
+export type InterventionLicense = "hung" | "incomplete" | "hit" | "attractor" | "exhausted";
+
+/**
+ * License for the arm. Hung is first-class and is not “pick a pricier model.”
+ */
+export function interventionLicense(
+  obs: Tau2Obs,
+  opts?: { loopExhausted?: boolean },
+): InterventionLicense {
+  if (obs.hung) return "hung";
+  if (obs.nSuccessProxy === 1) return "hit";
+  if (isIncompleteEpisode(obs)) return "incomplete";
+  if (opts?.loopExhausted) return "exhausted";
+  return "attractor";
+}
+
+/**
+ * Per-episode controller. Hung is read here — not deferred until loopExhausted.
+ * Hit → wait. Hung / crash / no-write → I_sku (catalog rebind).
+ * Completed miss + attractor → I_loop. loopExhausted is a fallback to I_sku.
+ * License is hung/incomplete, not “pick a pricier model.”
+ */
 export function recommendIntervention(
   obs: Tau2Obs,
   opts?: { loopExhausted?: boolean },
 ): InterventionArm {
+  if (obs.hung) return "I_sku";
   if (obs.nSuccessProxy === 1) return "wait";
-  if (opts?.loopExhausted) return "I_weight";
+  if (isIncompleteEpisode(obs)) return "I_sku";
+  if (opts?.loopExhausted) return "I_sku";
   return "I_loop";
 }
 
-/** Slice-level arm: wait only if every episode hit; else I_loop until topology is exhausted. */
+/** Slice-level arm: I_sku if ANY episode is hung or incomplete; wait only if every episode hit. */
 export function recommendSliceIntervention(
   obsList: Tau2Obs[],
   opts?: { loopExhausted?: boolean },
 ): InterventionArm {
-  if (obsList.length > 0 && obsList.every((o) => o.nSuccessProxy === 1)) return "wait";
-  if (opts?.loopExhausted) return "I_weight";
+  if (obsList.some((o) => o.hung)) return "I_sku";
+  if (obsList.length > 0 && obsList.every((o) => o.nSuccessProxy === 1)) {
+    return "wait";
+  }
+  if (obsList.some((o) => isIncompleteEpisode(o))) return "I_sku";
+  if (opts?.loopExhausted) return "I_sku";
   return "I_loop";
 }
 
@@ -217,15 +309,17 @@ export function summarizeObs(obsList: Tau2Obs[]): Tau2Obs {
     lastActions: last.lastActions,
     channels: [...new Set(obsList.flatMap((o) => o.channels))],
     critique:
-      hits === obsList.length
+      hits === obsList.length && !obsList.some((o) => o.hung)
         ? "path measure hits S; wait"
-        : obsNeedsPolicy(obsList)
-          ? "user asked cancel/update and agent refused or never called the tool; I_loop policy-checklist"
-          : toolFailures > 0
-            ? "tool failures in trajectory; inspect env channel"
-            : repeatActions > 0
-              ? "repeat actions; loop mutation or wait"
-              : "episode unfinished or miss; inspect cascade / tools",
+        : obsList.some((o) => isIncompleteEpisode(o))
+          ? "episode incomplete (hung / crash / no-write); I_sku (catalog rebind, not fine-tuning)"
+          : obsNeedsPolicy(obsList)
+            ? "user asked cancel/update and agent refused or never called the tool; I_loop policy-checklist"
+            : toolFailures > 0
+              ? "tool failures in trajectory; inspect env channel"
+              : repeatActions > 0
+                ? "repeat actions; loop mutation or wait"
+                : "episode unfinished or miss; inspect cascade / tools",
     toolFailures,
     repeatActions,
     missedActions: obsList.flatMap((o) => o.missedActions ?? []),
@@ -275,11 +369,12 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
   let applied = true;
   let rationale: string;
 
-  if (applyScope.waitKept.length > 0 && applyScope.looped.length === 0 && asObsList(obs).length > 0) {
+  if (applyScope.looped.length === 0 && asObsList(obs).length > 0) {
     graphAfter = graphBefore;
     techniqueAfter = techniqueBefore;
     applied = false;
-    rationale = REFUSED_GLOBAL_ILOOP;
+    rationale =
+      applyScope.waitKept.length > 0 ? REFUSED_GLOBAL_ILOOP : "incomplete licenses I_sku; no I_loop";
   } else if (obsNeedsPolicy(obs) && !graphHas(graphBefore, "policy-checklist")) {
     graphAfter = applyPolicyChecklistMutation(graphBefore, AIRLINE_POLICY_CHECKLIST);
     techniqueAfter = "policy-checklist";
@@ -321,17 +416,21 @@ export function applyILoop(start?: AgentGraph, obs?: Tau2Obs | Tau2Obs[]): ILoop
     graphAfter,
     graphDiff: diffOps(rec.ops),
     path: "fallback",
-    action: applied ? "I_loop" : applyScope.waitKept.length > 0 && applyScope.looped.length === 0 ? "wait" : "I_loop",
+    action: applied
+      ? "I_loop"
+      : applyScope.looped.length === 0 && applyScope.waitKept.length > 0
+        ? "wait"
+        : "I_loop",
     rationale,
     applyScope,
   };
 }
 
 /**
- * I_weight eval gate (slow clock). Mount only if the after-eval strictly beats
- * before. Serving keeps the old f_θ on reject (`servingPaused` stays false).
- * FakeTrainer exercises the protocol; a surrogate that cannot raise p_hit is
- * an honest reject — never a claimed 0731 LoRA.
+ * FakeTrainer / TrainJob eval gate (protocol stub). Not the paper slow arm.
+ * The official incomplete actuator is applyISku: propose pro-0813, gate,
+ * rebind n.model (catalog rebind, not fine-tuning). FakeTrainer / surrogate-prefix
+ * are not jumps and must not be reported as a θ win.
  */
 export function gateWeightMount(before: number, after: number): WeightGateDecision {
   if (after > before) {
@@ -340,7 +439,7 @@ export function gateWeightMount(before: number, after: number): WeightGateDecisi
       action: "mount",
       before,
       after,
-      reason: "after-eval beats before; mount adapter",
+      reason: "after-eval beats before; catalog rebind may mount pro-0813",
     };
   }
   return {
@@ -348,6 +447,6 @@ export function gateWeightMount(before: number, after: number): WeightGateDecisi
     action: "reject",
     before,
     after,
-    reason: "after-eval did not beat before; serving keeps old f_theta",
+    reason: "after-eval did not beat before; serving keeps flash-0731 (not a jump)",
   };
 }

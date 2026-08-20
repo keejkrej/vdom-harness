@@ -35,11 +35,10 @@ export type ImproveIter = {
  * adapter mount based on mode / traces. All non-topology paths go through
  * the eval gate before the live graph changes.
  *
- * Adapter / I_weight uses two clocks: serving keeps old θ (fast) while
- * `spawnTrainJob` trains from incomplete traces (slow). The live graph
- * changes only after `gateAdapter` / a held-out eval. servingPaused is never
- * set. FakeTrainer is the protocol unit test; SurrogateTrainer is an explicit
- * non-0731 θ (prompt-prefix stand-in), not a claimed API LoRA.
+ * Adapter / TrainJob is a protocol stub, not the paper slow arm.
+ * The τ² incomplete actuator is I_sku: gated catalog rebind → 0813
+ * (catalog rebind, not I_weight-as-trainer, not fine-tuning).
+ * servingPaused is never set. FakeTrainer / LoRA are not catalog jumps.
  */
 export async function improveLoop(opts: {
   task: Task;
@@ -185,9 +184,27 @@ export async function improveLoop(opts: {
   return history;
 }
 
-function pickMode(mode: ImproveMode, iter: number, _traces: Trace[]): ImproveMode {
+/** Incomplete traces license adapter / I_sku. Does not rewrite the iter ladder. */
+export function tracesLookIncomplete(traces: Trace[]): boolean {
+  return traces.some((t) => {
+    const extra = t as Trace & { hung?: boolean; reason?: string; termination?: string };
+    if (extra.hung) return true;
+    const blob = `${extra.reason ?? ""} ${extra.termination ?? ""} ${t.output ?? ""}`.toLowerCase();
+    return (
+      /\b(hung|timeout|crash)\b/.test(blob) ||
+      blob.includes("transfer_to_human") ||
+      blob.includes("reward0-early-transfer")
+    );
+  });
+}
+
+/**
+ * Explicit modes stay as requested. auto is capability → adapter → topology
+ * by iter index, unless traces look incomplete — then adapter / I_sku.
+ */
+export function pickMode(mode: ImproveMode, iter: number, traces: Trace[] = []): ImproveMode {
   if (mode !== "auto") return mode;
-  // auto: capability → adapter → topology
+  if (tracesLookIncomplete(traces)) return "adapter";
   if (iter === 0) return "capability";
   if (iter === 1) return "adapter";
   return "topology";

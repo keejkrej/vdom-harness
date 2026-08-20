@@ -2,11 +2,12 @@
  * Stdio JSONL sidecar. Python HalfDuplexAgent sends one turn per line.
  * Logs go to stderr so stdout stays machine-readable.
  *
- * Two-clock I_weight: set_technique / i_loop / turn keep answering (fast clock).
- * i_weight_spawn returns immediately with a TrainJob; servingPaused is always
- * false. 0731 cannot take an adapter — default trainer is SurrogateTrainer.
+ * Fast clock: set_technique / i_loop / turn keep answering.
+ * I_sku (i_sku) is the slow arm: propose pro-0813, gate, rebind n.model
+ * (catalog rebind, not I_weight-as-trainer, not fine-tuning).
+ * servingPaused is always false. FakeTrainer / i_weight_* are stubs.
  */
-import { createProvider, DeterministicProvider, type Message, type ToolSpec } from "../providers.js";
+import { createProvider, DeterministicProvider, resolveProvider, type Message, type ToolSpec } from "../providers.js";
 import { filterGymToolCalls, runTau2Turn } from "./tau2-turn.js";
 import { type AgentGraph } from "../ir.js";
 import {
@@ -29,6 +30,7 @@ import {
 } from "../trainer.js";
 import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
+import { applyISku, servingModelOfGraph } from "./tau2-weight.js";
 import { runSelfObs } from "./tau2-self-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { createInterface } from "node:readline";
@@ -64,7 +66,7 @@ type SidecarReply = Tau2TurnResponse & {
   servingPaused?: boolean;
   spawned?: boolean;
   done?: boolean;
-  gate?: ReturnType<typeof gateWeightMount>;
+  gate?: ReturnType<typeof gateWeightMount> | { arm: "I_sku"; action: "mount" | "reject"; before: number; after: number | null; reason: string };
   job?: TrainJob;
   path?: "self" | "fallback";
   action?: "wait" | "I_loop";
@@ -72,6 +74,10 @@ type SidecarReply = Tau2TurnResponse & {
   applied?: boolean;
   graphEdits?: unknown;
   applyScope?: ApplyScope;
+  jumped?: boolean;
+  servingModel?: string;
+  trained?: false;
+  catalog?: ReturnType<typeof applyISku>;
 };
 
 function providerFor(model?: string): ReturnType<typeof createProvider> {
@@ -85,11 +91,13 @@ let currentTechnique: Tau2Technique = "one-shot";
 let currentGraph: AgentGraph = tau2Graph("one-shot");
 let graphC0: AgentGraph = currentGraph;
 let graphC1: AgentGraph | undefined;
+let graphSku: AgentGraph | undefined;
 let applyScope: ApplyScope | undefined;
 
 function resetApplyScope(): void {
   applyScope = undefined;
   graphC1 = undefined;
+  graphSku = undefined;
   graphC0 = currentGraph;
 }
 
@@ -100,6 +108,7 @@ function liveGraph(taskId?: string, reqGraph?: AgentGraph): AgentGraph {
     currentGraph,
     graphBefore: graphC0,
     graphAfter: graphC1 ?? currentGraph,
+    graphSku,
     applyScope,
   });
 }
@@ -181,7 +190,11 @@ async function handle(line: string): Promise<void> {
     graphC0 = result.graphBefore;
     graphC1 = result.applied ? result.graphAfter : undefined;
     if (result.applied) {
-      if (result.applyScope && result.applyScope.waitKept.length > 0) {
+      if (
+        result.applyScope &&
+        (result.applyScope.waitKept.length > 0 || (result.applyScope.weighted ?? []).length > 0) &&
+        result.applyScope.looped.length > 0
+      ) {
         // Mixed batch: default C stays C0. Never a silent global mount.
         currentGraph = result.graphBefore;
         currentTechnique = techniqueOfGraph(result.graphBefore);
@@ -203,6 +216,41 @@ async function handle(line: string): Promise<void> {
       rationale: result.rationale,
       applied: result.applied,
       applyScope: result.applyScope,
+    });
+    return;
+  }
+
+  if (req.op === "i_sku" || req.op === "i_catalog" || req.op === "i_weight_catalog") {
+    const before = Number(req.before ?? 0);
+    const after =
+      req.after !== undefined && req.after !== null ? Number(req.after) : undefined;
+    const catalog = applyISku({
+      graph: req.graph ?? currentGraph,
+      before,
+      after,
+    });
+    if (catalog.action === "mount") {
+      // Sibling SKU graph for the weighted bucket. Do not overwrite C0 —
+      // wait-hit isolation would then either leak 0813 to hits or serve 44 on unrebound C0.
+      graphSku = catalog.graph;
+    }
+    write({
+      op: "ok",
+      id,
+      servingPaused: false,
+      jumped: catalog.jumped,
+      servingModel: catalog.servingModelId,
+      catalog,
+      trained: false,
+      gate: {
+        arm: "I_sku",
+        action: catalog.action,
+        before: catalog.before,
+        after: catalog.after,
+        reason: catalog.reason,
+      },
+      graph: catalog.graph,
+      content: catalog.action,
     });
     return;
   }
@@ -290,22 +338,30 @@ async function handle(line: string): Promise<void> {
       reqTechnique: req.technique,
       currentTechnique,
     });
+    const servingModel = servingModelOfGraph(live, req.model);
+    const provider =
+      servingModel === "deterministic" || servingModel === "scripted" || req.model === "deterministic"
+        ? new DeterministicProvider(servingModel)
+        : resolveProvider(servingModel);
     const result = await runTau2Turn({
       policy: req.policy ?? "",
       tools: req.tools ?? [],
       messages: req.messages ?? [],
       technique,
       graph: live,
-      model: req.model,
-      provider: req.model === "deterministic" ? new DeterministicProvider() : createProvider(),
+      model: servingModel,
+      provider,
     });
-    if (req.taskId && applyScope?.waitKept.includes(req.taskId)) {
+    if (
+      req.taskId &&
+      (applyScope?.waitKept.includes(req.taskId) || (applyScope?.weighted ?? []).includes(req.taskId))
+    ) {
       graphC0 = result.graph;
     } else if (req.taskId && applyScope?.looped.includes(req.taskId)) {
       graphC1 = result.graph;
       currentGraph = result.graph;
       currentTechnique = techniqueOfGraph(result.graph);
-    } else if (!(applyScope && applyScope.waitKept.length > 0)) {
+    } else if (!(applyScope && (applyScope.waitKept.length > 0 || (applyScope.weighted ?? []).length > 0))) {
       currentGraph = result.graph;
       currentTechnique = techniqueOfGraph(result.graph);
     } else {
@@ -327,6 +383,7 @@ async function handle(line: string): Promise<void> {
       graph: currentGraph,
       graphEdits: result.graphEdits,
       servingPaused: false,
+      servingModel: servingModelOfGraph(result.graph, servingModel),
     });
   } catch (err) {
     write({

@@ -73,22 +73,29 @@ export type Tau2Obs = {
   critique: string;
   toolFailures: number;
   repeatActions: number;
-  /** Paper arm Obs should emit: I_loop | I_weight | wait */
-  arm?: "I_loop" | "I_weight" | "wait";
+  /** Paper arm Obs should emit: I_loop | I_sku | wait. I_weight is a trainer-stub alias; I_catalog is a prior name. */
+  arm?: "I_loop" | "I_sku" | "I_catalog" | "I_weight" | "wait";
   /** Official task id. Required for per-task C on mixed wait-hit / miss batches. */
   taskId?: string;
   missedActions?: Tau2MissedAction[];
   refusedCancel?: boolean;
   inventedPolicy?: boolean;
   hung?: boolean;
+  /** user_stop | transfer | timeout | crash | … when the runner recorded one. */
+  termination?: string;
   /** Typed I_loop graph when the miss is a refused / never-called cancel or update. */
   techniqueRecommendation?: Tau2Technique;
 };
 
-/** Mixed-batch I_loop split: wait+hit keep C0; miss / I_loop get C1. */
+/**
+ * Mixed-batch split:
+ * wait+hit keep C0; completed I_loop miss get C1; incomplete / I_sku keep C0.
+ */
 export type ApplyScope = {
   waitKept: string[];
   looped: string[];
+  /** Hung / timeout / transfer / no-write. Same graph as waitKept (C0), typed separately. */
+  weighted: string[];
 };
 
 export type Tau2SimulationLog = {
