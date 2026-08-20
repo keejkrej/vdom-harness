@@ -10,7 +10,12 @@ from tau2_vdom.improve import (
     pass_hat_k_from_rewards,
 )
 from tau2_vdom.kernel_tools import strip_kernel_self_tools
-from tau2_vdom.runner import _obs, serialize_reward_info
+from tau2_vdom.runner import (
+    _obs,
+    recommend_intervention,
+    recommend_slice_intervention,
+    serialize_reward_info,
+)
 
 
 def test_obs_missed_cancel_recommends_policy() -> None:
@@ -91,7 +96,9 @@ def test_obs_hung_keeps_task() -> None:
     obs = _obs([], None, [], hung=True)
     assert obs["hung"] is True
     assert obs["nSuccessProxy"] == 0
+    assert obs["arm"] == "I_weight"
     assert "null reward" in obs["critique"]
+    assert recommend_intervention(obs) == "I_weight"
 
 
 def test_skipped_task_stays_in_task_phit() -> None:
@@ -177,7 +184,7 @@ def test_apply_scope_mixed_wait_hit() -> None:
             {"taskId": "39", "arm": "I_loop", "nSuccessProxy": 0, "hung": False},
         ]
     )
-    assert scope == {"waitKept": ["44"], "looped": ["39"]}
+    assert scope == {"waitKept": ["44"], "looped": ["39"], "weighted": []}
     record = {"selfObsPath": "self", "applyScope": scope}
     assert record["selfObsPath"] == "self"
     assert record["applyScope"]["waitKept"] == ["44"]
@@ -204,7 +211,59 @@ def test_collect_obs_sets_task_id() -> None:
     assert obs[0]["arm"] == "wait"
     assert obs[1]["taskId"] == "39"
     assert obs[1]["arm"] == "I_loop"
-    assert apply_scope_from_obs(obs) == {"waitKept": ["44"], "looped": ["39"]}
+    assert apply_scope_from_obs(obs) == {"waitKept": ["44"], "looped": ["39"], "weighted": []}
+
+
+def test_typed_arms_hung_hit_policy() -> None:
+    hung = _obs([], None, [], hung=True)
+    assert hung["arm"] == "I_weight"
+    hit = _obs(
+        [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
+        1.0,
+        [],
+        reward_info={"reward": 1.0, "action_checks": []},
+    )
+    assert hit["arm"] == "wait"
+    policy = _obs(
+        [
+            {
+                "kind": "text",
+                "text": "I cannot cancel this economy reservation; a personal reason is not covered.",
+                "ok": True,
+            }
+        ],
+        0.0,
+        [],
+    )
+    assert policy["arm"] == "I_loop"
+    extra = _obs(
+        [
+            {
+                "kind": "tool",
+                "text": "cancel_reservation",
+                "toolName": "cancel_reservation",
+                "toolArgs": {"reservation_id": "OTHER"},
+                "ok": True,
+            }
+        ],
+        0.0,
+        [],
+    )
+    assert extra["arm"] == "I_loop"
+    assert extra["lastActions"] == ["cancel_reservation"]
+    assert "MSJ4OA" not in str(extra)
+    assert recommend_slice_intervention([hit, hung]) == "I_weight"
+    assert recommend_slice_intervention([hit, policy]) == "I_loop"
+    scope = apply_scope_from_obs(
+        [
+            {**hit, "taskId": "44"},
+            {**hung, "taskId": "41"},
+            {**policy, "taskId": "39"},
+        ]
+    )
+    assert scope["waitKept"] == ["44"]
+    assert scope["weighted"] == ["41"]
+    assert scope["looped"] == ["39"]
 
 
 def test_hit_still_waits() -> None:
@@ -223,6 +282,7 @@ def main() -> int:
         test_obs_missed_cancel_recommends_policy,
         test_obs_mock_update_does_not_select_policy,
         test_obs_hung_keeps_task,
+        test_typed_arms_hung_hit_policy,
         test_skipped_task_stays_in_task_phit,
         test_obs_personal_reason_is_invented_policy,
         test_missed_tool_names_only_drops_gold_ids,

@@ -81,14 +81,21 @@ export type Tau2Obs = {
   refusedCancel?: boolean;
   inventedPolicy?: boolean;
   hung?: boolean;
+  /** user_stop | transfer | timeout | crash | … when the runner recorded one. */
+  termination?: string;
   /** Typed I_loop graph when the miss is a refused / never-called cancel or update. */
   techniqueRecommendation?: Tau2Technique;
 };
 
-/** Mixed-batch I_loop split: wait+hit keep C0; miss / I_loop get C1. */
+/**
+ * Mixed-batch split:
+ * wait+hit keep C0; completed I_loop miss get C1; incomplete / I_weight keep C0.
+ */
 export type ApplyScope = {
   waitKept: string[];
   looped: string[];
+  /** Hung / timeout / transfer / no-write. Same graph as waitKept (C0), typed separately. */
+  weighted: string[];
 };
 
 export type Tau2SimulationLog = {

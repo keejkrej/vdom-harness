@@ -17,6 +17,7 @@ import {
   graphHas,
   loopExhausted,
   obsNeedsPolicy,
+  isIncompleteEpisode,
   recommendIntervention,
   recommendSliceIntervention,
   REFUSED_GLOBAL_ILOOP,
@@ -301,10 +302,28 @@ async function testILoopAndWeightGate(): Promise<void> {
   assertEq(rejectDown.action, "reject", "I_weight rejects when after < before");
 
   const sliceMiss = recommendSliceIntervention([
-    { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
-    { nSteps: 1, nSuccessProxy: 0, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
+    {
+      nSteps: 1,
+      nSuccessProxy: 1,
+      lastActions: ["update_task_status"],
+      channels: ["env"],
+      critique: "",
+      toolFailures: 0,
+      repeatActions: 0,
+      hung: false,
+    },
+    {
+      nSteps: 1,
+      nSuccessProxy: 0,
+      lastActions: ["create_task"],
+      channels: ["env"],
+      critique: "",
+      toolFailures: 0,
+      repeatActions: 0,
+      hung: false,
+    },
   ]);
-  assertEq(sliceMiss, "I_loop", "mixed slice still emits I_loop");
+  assertEq(sliceMiss, "I_loop", "mixed completed-miss slice still emits I_loop");
   const sliceDone = recommendSliceIntervention([
     { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
     { nSteps: 1, nSuccessProxy: 1, lastActions: [], channels: [], critique: "", toolFailures: 0, repeatActions: 0 },
@@ -375,7 +394,9 @@ async function testFailureAwareObsAndPolicyLoop(): Promise<void> {
   });
   assertEq(hung.hung, true, "hung feature");
   assertEq(hung.nSuccessProxy, 0, "hung is not a hit");
+  assertEq(hung.arm, "I_weight", "hung licenses I_weight, not I_loop");
   assert(hung.critique.includes("null reward"), "hung critique keeps the task in the set");
+  assertEq(isIncompleteEpisode(hung), true, "hung is incomplete");
 
   const policy = applyILoop(undefined, obs);
   assertEq(policy.applied, true, "I_loop applies policy graph on refusedCancel");
@@ -972,6 +993,120 @@ async function testSelfObsPromptHasEpisodesNoGoldIds(): Promise<void> {
   const scope = computeApplyScope([waitHitObs("44"), missCancelObs("39")]);
   assertEq(scope.waitKept.join(","), "44", "computeApplyScope waitKept");
   assertEq(scope.looped.join(","), "39", "computeApplyScope looped");
+  assertEq(scope.weighted.join(","), "", "mixed wait+policy-miss has no weighted bucket");
+}
+
+function hungObs(taskId: string): Tau2Obs {
+  return {
+    taskId,
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "trial hung or skipped; keep task in the set (null reward), retry once",
+    toolFailures: 0,
+    repeatActions: 0,
+    arm: "I_weight",
+    hung: true,
+    termination: "timeout",
+  };
+}
+
+async function testTypedInterventionArms(): Promise<void> {
+  const hung = recommendIntervention({
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: true,
+  });
+  assertEq(hung, "I_weight", "hung ⇒ I_weight");
+
+  const timeout = recommendIntervention({
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+    termination: "timeout",
+  });
+  assertEq(timeout, "I_weight", "timeout ⇒ I_weight");
+
+  const noWrite = recommendIntervention({
+    nSteps: 0,
+    nSuccessProxy: 0,
+    lastActions: [],
+    channels: [],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+  });
+  assertEq(noWrite, "I_weight", "no-write miss ⇒ I_weight");
+
+  const hit = recommendIntervention({
+    nSteps: 2,
+    nSuccessProxy: 1,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+  });
+  assertEq(hit, "wait", "hit ⇒ wait");
+
+  const policyMiss = recommendIntervention({
+    nSteps: 3,
+    nSuccessProxy: 0,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+    refusedCancel: true,
+    inventedPolicy: true,
+    techniqueRecommendation: "policy-checklist",
+  });
+  assertEq(policyMiss, "I_loop", "completed policy miss ⇒ I_loop");
+
+  const extraWrite = recommendIntervention({
+    nSteps: 2,
+    nSuccessProxy: 0,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: false,
+  });
+  assertEq(extraWrite, "I_loop", "completed extra-write attractor ⇒ I_loop");
+
+  const sliceHung = recommendSliceIntervention([waitHitObs("44"), hungObs("41")]);
+  assertEq(sliceHung, "I_weight", "any incomplete episode ⇒ slice I_weight, not I_loop");
+
+  const slicePolicy = recommendSliceIntervention([waitHitObs("44"), missCancelObs("39")]);
+  assertEq(slicePolicy, "I_loop", "completed policy miss in mixed slice still I_loop");
+
+  const scope = computeApplyScope([waitHitObs("44"), hungObs("41"), missCancelObs("39")]);
+  assertEq(scope.waitKept.join(","), "44", "wait-hit stays waitKept");
+  assertEq(scope.weighted.join(","), "41", "hung goes to weighted / incomplete bucket");
+  assertEq(scope.looped.join(","), "39", "completed policy miss stays looped");
+  const waitGraph = graphForScopedTask(tau2Graph("one-shot"), tau2Graph("self-refine"), scope, "41");
+  assert(!graphHas(waitGraph, "critic"), "weighted / incomplete keeps C0");
+  const hungPrompt = formatSelfObsUser({ graph: tau2Graph("one-shot"), obs: [hungObs("41")] });
+  assert(hungPrompt.includes("arm=I_weight"), "prompt lists I_weight for hung");
+  assert(!hasGoldReservationId(hungPrompt), "hung prompt has no gold reservation IDs");
+  const hungLoop = applyILoop(tau2Graph("one-shot"), hungObs("41"));
+  assertEq(hungLoop.applied, false, "I_loop does not apply to hung-only");
+  assertEq(hungLoop.applyScope?.weighted.join(","), "41", "hung-only applyScope is weighted");
 }
 
 async function testWordReverseUntouched(): Promise<void> {
@@ -1006,6 +1141,7 @@ async function main(): Promise<void> {
     ["all-miss valid self I_loop still applies", testAllMissSelfILoopStillApplies],
     ["host applyILoop fallback uses the wait-hit gate", testApplyILoopFallbackWaitHitGate],
     ["self-Obs prompt has per-episode arms and no gold IDs", testSelfObsPromptHasEpisodesNoGoldIds],
+    ["typed arms: hung I_weight / hit wait / policy I_loop", testTypedInterventionArms],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

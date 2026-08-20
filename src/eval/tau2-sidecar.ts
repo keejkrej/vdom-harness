@@ -181,7 +181,11 @@ async function handle(line: string): Promise<void> {
     graphC0 = result.graphBefore;
     graphC1 = result.applied ? result.graphAfter : undefined;
     if (result.applied) {
-      if (result.applyScope && result.applyScope.waitKept.length > 0) {
+      if (
+        result.applyScope &&
+        (result.applyScope.waitKept.length > 0 || (result.applyScope.weighted ?? []).length > 0) &&
+        result.applyScope.looped.length > 0
+      ) {
         // Mixed batch: default C stays C0. Never a silent global mount.
         currentGraph = result.graphBefore;
         currentTechnique = techniqueOfGraph(result.graphBefore);
@@ -299,13 +303,16 @@ async function handle(line: string): Promise<void> {
       model: req.model,
       provider: req.model === "deterministic" ? new DeterministicProvider() : createProvider(),
     });
-    if (req.taskId && applyScope?.waitKept.includes(req.taskId)) {
+    if (
+      req.taskId &&
+      (applyScope?.waitKept.includes(req.taskId) || (applyScope?.weighted ?? []).includes(req.taskId))
+    ) {
       graphC0 = result.graph;
     } else if (req.taskId && applyScope?.looped.includes(req.taskId)) {
       graphC1 = result.graph;
       currentGraph = result.graph;
       currentTechnique = techniqueOfGraph(result.graph);
-    } else if (!(applyScope && applyScope.waitKept.length > 0)) {
+    } else if (!(applyScope && (applyScope.waitKept.length > 0 || (applyScope.weighted ?? []).length > 0))) {
       currentGraph = result.graph;
       currentTechnique = techniqueOfGraph(result.graph);
     } else {

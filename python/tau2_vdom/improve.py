@@ -46,6 +46,8 @@ from tau2_vdom.runner import (
     _litellm_user_model,
     _obs,
     _pin_tau2_judges,
+    is_incomplete_obs,
+    recommend_slice_intervention,
     serialize_reward_info,
     write_eval_file,
 )
@@ -285,8 +287,9 @@ def run_slice(
 
 
 def apply_scope_from_obs(obs_list: list[dict[str, Any]]) -> dict[str, list[str]]:
-    """Wait+hit keep C0; miss / I_loop get C1. Host mirror of the sidecar applyScope."""
+    """Wait+hit keep C0; completed I_loop miss get C1; incomplete / I_weight keep C0."""
     hits: set[str] = set()
+    incompletes: set[str] = set()
     order: list[str] = []
     for o in obs_list:
         tid = str(o.get("taskId") or "")
@@ -297,9 +300,12 @@ def apply_scope_from_obs(obs_list: list[dict[str, Any]]) -> dict[str, list[str]]
         hit = o.get("arm") == "wait" and o.get("nSuccessProxy") == 1 and not o.get("hung")
         if hit:
             hits.add(tid)
+        elif is_incomplete_obs(o):
+            incompletes.add(tid)
     wait_kept = [tid for tid in order if tid in hits]
-    looped = [tid for tid in order if tid not in hits]
-    return {"waitKept": wait_kept, "looped": looped}
+    weighted = [tid for tid in order if tid in incompletes]
+    looped = [tid for tid in order if tid not in hits and tid not in incompletes]
+    return {"waitKept": wait_kept, "looped": looped, "weighted": weighted}
 
 
 def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
@@ -310,6 +316,9 @@ def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
             reward = float(sim.reward_info.reward)
         actions = _actions_from_messages(getattr(sim, "messages", []) or [])
         hung = bool(getattr(sim, "hung", False))
+        term = _termination(sim)
+        if hung and not term:
+            term = "timeout"
         obs_list.append(
             _obs(
                 actions,
@@ -319,6 +328,7 @@ def _collect_obs(simulations: list[Any]) -> list[dict[str, Any]]:
                 hung=hung,
                 messages=getattr(sim, "messages", None) or [],
                 task_id=str(getattr(sim, "task_id", "") or "") or None,
+                termination=term or None,
             )
         )
     return obs_list
@@ -731,6 +741,41 @@ def run_improve(
 
         miss = any(o.get("nSuccessProxy", 0) != 1 for o in obs)
         from tau2_vdom.agent import TURN_TRACES_BY_TASK
+
+        slice_arm = recommend_slice_intervention(obs)
+        if slice_arm == "I_weight" and weight:
+            current = _p_hit(pass_hat)
+            before = 0.0 if current is None else current
+            w = _run_weight_round(
+                sidecar=sidecar,
+                sims=sims,
+                extra_traces=dict(TURN_TRACES_BY_TASK),
+                before=before,
+            )
+            i_weight_report = w
+            serving_paused = serving_paused or bool(w.get("servingPaused"))
+            apply_scope = apply_scope_from_obs(obs)
+            rounds.append(
+                _round_record(
+                    round_i=r,
+                    technique=technique,
+                    pass_hat=pass_hat,
+                    avg=avg,
+                    obs=obs,
+                    by_task=_rewards_by_task(sims, task_ids),
+                    intervention="I_weight",
+                    graph_diff=_weight_graph_diff(w),
+                    eval_file=path,
+                    skipped=skipped,
+                    reward_infos=[
+                        serialize_reward_info(getattr(s, "reward_info", None)) for s in sims
+                    ],
+                    i_weight=w,
+                    apply_scope=apply_scope,
+                )
+            )
+            stop_reason = "weight-mounted" if w.get("mounted") else "weight-rejected"
+            break
 
         loop = _sidecar_i_loop(
             sidecar,

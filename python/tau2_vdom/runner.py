@@ -280,6 +280,64 @@ def serialize_reward_info(reward_info: Any) -> dict[str, Any] | None:
     }
 
 
+_INCOMPLETE_TERM = re.compile(r"timeout|hung|transfer|crash|error", re.I)
+
+
+def called_write_tools(obs: dict[str, Any]) -> bool:
+    return any(a and not str(a).startswith("text:") for a in (obs.get("lastActions") or []))
+
+
+def has_loop_attractor(obs: dict[str, Any]) -> bool:
+    if obs.get("inventedPolicy") or obs.get("refusedCancel"):
+        return True
+    if obs.get("techniqueRecommendation") == "policy-checklist":
+        return True
+    missed = obs.get("missedActions") or []
+    if any(isinstance(a, dict) and a.get("name") in POLICY_WRITE_TOOLS for a in missed):
+        return True
+    return any(a in POLICY_WRITE_TOOLS for a in (obs.get("lastActions") or []))
+
+
+def is_incomplete_obs(obs: dict[str, Any]) -> bool:
+    """Hung / timeout / transfer / crash / no-write without a completed policy attractor."""
+    if obs.get("nSuccessProxy") == 1 and not obs.get("hung"):
+        return False
+    if obs.get("hung"):
+        return True
+    term = str(obs.get("termination") or "").lower()
+    if term and _INCOMPLETE_TERM.search(term):
+        return True
+    if not called_write_tools(obs) and not has_loop_attractor(obs):
+        return True
+    return False
+
+
+def recommend_intervention(obs: dict[str, Any], *, loop_exhausted: bool = False) -> str:
+    """Per-episode arm: hit→wait; incomplete→I_weight; completed miss→I_loop."""
+    if obs.get("nSuccessProxy") == 1 and not obs.get("hung"):
+        return "wait"
+    if is_incomplete_obs(obs):
+        return "I_weight"
+    if loop_exhausted:
+        return "I_weight"
+    return "I_loop"
+
+
+def recommend_slice_intervention(
+    obs_list: list[dict[str, Any]],
+    *,
+    loop_exhausted: bool = False,
+) -> str:
+    """I_weight if ANY episode is incomplete; wait only if every episode hit."""
+    if obs_list and all(o.get("nSuccessProxy") == 1 and not o.get("hung") for o in obs_list):
+        return "wait"
+    if any(is_incomplete_obs(o) for o in obs_list):
+        return "I_weight"
+    if loop_exhausted:
+        return "I_weight"
+    return "I_loop"
+
+
 def _obs(
     actions: list[dict[str, Any]],
     reward: float | None,
@@ -288,6 +346,7 @@ def _obs(
     hung: bool = False,
     messages: list[Any] | None = None,
     task_id: str | None = None,
+    termination: str | None = None,
 ) -> dict[str, Any]:
     last = [
         a.get("toolName") or f"text:{(a.get('text') or '')[:80]}"
@@ -304,28 +363,35 @@ def _obs(
     recommend_policy = (not p_hit) and (
         refused_cancel or invented_policy or bool(missed_policy)
     )
+    draft = {
+        "nSuccessProxy": p_hit,
+        "lastActions": last,
+        "hung": hung,
+        "termination": termination,
+        "missedActions": missed,
+        "refusedCancel": refused_cancel,
+        "inventedPolicy": invented_policy,
+        "techniqueRecommendation": "policy-checklist" if recommend_policy else None,
+    }
+    arm = recommend_intervention(draft)
     if p_hit:
         critique = "path measure hits S; wait"
-        arm = "wait"
     elif hung:
         critique = "trial hung or skipped; keep task in the set (null reward), retry once"
-        arm = "I_loop"
+    elif arm == "I_weight":
+        critique = "episode incomplete (hung / timeout / no-write); I_weight"
     elif recommend_policy:
         names = ", ".join(a["name"] for a in missed_policy) or "cancel/update"
         critique = (
             f"user asked cancel/update and agent refused or never called the tool "
             f"({names}); I_loop policy-checklist"
         )
-        arm = "I_loop"
     elif failures:
         critique = "tool failures in trajectory; inspect env channel"
-        arm = "I_loop"
     elif repeats:
         critique = "repeat actions; loop mutation or wait"
-        arm = "I_loop"
     else:
         critique = "episode unfinished or miss; inspect cascade / tools"
-        arm = "I_loop"
     return {
         "nSteps": max(len(traces), len(actions)),
         "nSuccessProxy": p_hit,
@@ -339,6 +405,7 @@ def _obs(
         "refusedCancel": refused_cancel,
         "inventedPolicy": invented_policy,
         "hung": hung,
+        "termination": termination,
         "techniqueRecommendation": "policy-checklist" if recommend_policy else None,
         "taskId": str(task_id) if task_id else None,
     }
@@ -408,6 +475,11 @@ def write_eval_file(
                     hung=hung,
                     messages=messages,
                     task_id=str(getattr(sim, "task_id", "") or "") or None,
+                    termination=(
+                        getattr(getattr(sim, "termination_reason", None), "value", None)
+                        or str(getattr(sim, "termination_reason", "") or "")
+                        or None
+                    ),
                 ),
                 "rewardInfo": compact_ri,
                 "hung": hung,

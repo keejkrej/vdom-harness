@@ -5,6 +5,7 @@ import {
   applyILoop,
   computeApplyScope,
   diffOps,
+  recommendIntervention,
   REFUSED_GLOBAL_ILOOP,
   techniqueOfGraph,
   type ILoopResult,
@@ -65,6 +66,7 @@ const PATCH_ROLES = new Set(["critic", "refine", "validator", "policy", "policy-
  */
 export const SELF_OBS_WAIT_HIT_RULES = `Each episode lists taskId, reward, arm, hung, and write tool names (never reservation IDs).
 If arm is wait and reward is 1, do not infer a missed cancel/update for that task.
+If hung or incomplete (timeout / no-write / transfer), arm is I_weight; do not mount I_loop on those tasks.
 Do not mount a cancel-always / upgrade-always node that applies to wait-hit tasks.
 If you cannot write a gated patch (graphPatch.taskIds that leave wait-hit tasks on C0), return {"action":"wait"}.
 Never include reservation IDs in the patch.
@@ -127,7 +129,7 @@ export function episodesFromInput(input: SelfObsInput): Tau2Obs[] {
   const rewards = input.rewards ?? [];
   return rewards.map((r, i) => {
     const hit = r != null && r >= 1 - 1e-6;
-    return {
+    const row: Tau2Obs = {
       nSteps: 0,
       nSuccessProxy: hit ? 1 : 0,
       lastActions: [],
@@ -135,10 +137,11 @@ export function episodesFromInput(input: SelfObsInput): Tau2Obs[] {
       critique: "",
       toolFailures: 0,
       repeatActions: 0,
-      arm: hit ? "wait" : "I_loop",
       hung: false,
       taskId: input.taskIds?.[i],
-    } satisfies Tau2Obs;
+    };
+    row.arm = recommendIntervention(row);
+    return row;
   });
 }
 
@@ -148,7 +151,7 @@ function formatEpisodes(input: SelfObsInput): string {
   const lines = episodes.map((o, i) => {
     const id = o.taskId || String(i);
     const reward = o.nSuccessProxy;
-    const arm = o.arm ?? (reward === 1 ? "wait" : "I_loop");
+    const arm = o.arm ?? recommendIntervention(o);
     return `- taskId=${id} reward=${reward} arm=${arm} hung=${Boolean(o.hung)} writeTools=${writeToolNames(o)}`;
   });
   return `Episodes:\n${lines.join("\n")}\n${SELF_OBS_WAIT_HIT_RULES}`;
@@ -355,8 +358,14 @@ export async function runSelfObs(input: SelfObsInput): Promise<SelfObsResult> {
     return waitResult(graphBefore, "self", parsed.rationale, raw, applyScope);
   }
 
-  if (applyScope.waitKept.length > 0 && applyScope.looped.length === 0 && episodes.length > 0) {
-    return waitResult(graphBefore, "self", REFUSED_GLOBAL_ILOOP, raw, applyScope);
+  if (applyScope.looped.length === 0 && episodes.length > 0) {
+    return waitResult(
+      graphBefore,
+      "self",
+      applyScope.waitKept.length > 0 ? REFUSED_GLOBAL_ILOOP : "incomplete licenses I_weight; no I_loop",
+      raw,
+      applyScope,
+    );
   }
 
   const patched = applyGraphPatch(graphBefore, parsed.graphPatch);
