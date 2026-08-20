@@ -55,6 +55,8 @@ Finished: 2026-08-19 14:11 CEST. Compact: `improve-live-0731.json`.
 
 Official post-gate 39/44 log (replay falsifier, not a live 0813 vs 0731 table): 39 is `I_loop`; 44 hung/timeout is `I_sku` / catalog rebind; `waitKept=[]`. If 44 is `I_loop` unless `loopExhausted`, the test fails. 44 did not train.
 
+Honest I_sku reject cell (controller replay of saved live hung-44 traces; omit after; `nTurns=9` is one hung trial, not nine hangs; not a new timeout; not a result): `improve-live-0731-isku-44-reject.json`.
+
 Airline `reward_basis` is DB × COMMUNICATE (`communicate_info` is `[]` on 39/44), so score 0 is a DB miss. ACTION / `nl_assertions` are diagnostics only.
 
 Gold (from `.tau2-bench/data/tau2/domains/airline/tasks.json`; the policy node encodes **rules**, never these IDs):
