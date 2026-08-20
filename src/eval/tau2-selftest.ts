@@ -9,6 +9,7 @@ import {
 } from "../providers.js";
 import { RuntimeDOM } from "../reconciler.js";
 import { findNode, flatten } from "../ir.js";
+import { providerForNode } from "../runtime.js";
 import { runTau2Turn } from "./tau2-turn.js";
 import { observeTau2, actionFromCompletion, markRepeats } from "./tau2-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
@@ -35,6 +36,7 @@ import {
   CONTROLLER_NOTE,
   appliedFromScope,
   controlBatch,
+  servingGraphForTask,
   servingModelForTask,
 } from "./tau2-control.js";
 import {
@@ -1406,8 +1408,8 @@ async function testCatalogJumpMounts0813(): Promise<void> {
   assertEq(catalogSwapOnServing(mount.serving), true, "catalog swap is on S, not C");
   assertEq(
     dom.current.get("solve")?.provider?.model,
-    CATALOG_JUMP_MODEL,
-    "PhysicalNode.provider rebound to 0813 (derived from S)",
+    SERVING_MODEL,
+    "I_sku does not spray 0813 onto PhysicalNode.provider",
   );
   const later = servingProviderAfterJump(mount.graph, mock0731, dom, "solve", mount.serving);
   assertEq(later.model, CATALOG_JUMP_MODEL, "later serving step uses 0813, not 0731");
@@ -1480,6 +1482,53 @@ async function testServingPointerBesideC(): Promise<void> {
   assertEq(mounted.trained, false, "6. mount not a trainer");
 }
 
+async function testMixed3944LaterServingTypedByS(): Promise<void> {
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
+  const mock0731 = new DeterministicProvider(SERVING_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, mock0731);
+  const dom = new RuntimeDOM();
+  dom.reconcile(start);
+  assertEq(dom.current.get("solve")?.provider?.model, SERVING_MODEL, "pre-mount bound is 0731");
+
+  const obs39 = missCancelObs("39");
+  const obs44 = hungObs("44");
+  const omit = controlBatch([obs39, obs44], { graph: start, provider: mock0813, dom });
+  assertEq(omit.gate?.action, "reject", "omit after still rejects");
+  assertEq(omit.gate?.jumped, false, "omit after jumped=false");
+  assert(omit.gate?.reason.includes("0813 existing is not a gate"), "0813 existing is not a gate");
+  assertEq(omit.servingSku.sku, SERVING_MODEL, "omit after: S stays 0731");
+  assertEq(omit.servingPaused, false, "omit after servingPaused=false");
+  assertEq(dom.current.get("solve")?.provider?.model, SERVING_MODEL, "omit after does not spray 0813");
+
+  const mounted = controlBatch([obs39, obs44], {
+    graph: start,
+    before: 0,
+    after: 1e-6,
+    provider: mock0813,
+    dom,
+  });
+  assertEq(mounted.gate?.action, "mount", "fixture after=before+ε may mount");
+  assertEq(mounted.servingPaused, false, "servingPaused stays false");
+  assertEq(mounted.trained, false, "not a trainer");
+  assert(sameCTopology(mounted.graphSku ?? start, start), "C topology stays");
+  assertEq(findNode(mounted.graphC0!, "solve")?.model, SERVING_MODEL, "C n.model stays 0731");
+  assertEq(servingModelForTask(mounted, "39"), SERVING_MODEL, "39 S is 0731");
+  assertEq(servingModelForTask(mounted, "44"), CATALOG_JUMP_MODEL, "44 S is 0813");
+
+  const solve39 = findNode(servingGraphForTask(mounted, "39")!, "solve")!;
+  const solve44 = findNode(servingGraphForTask(mounted, "44")!, "solve")!;
+  const p39 = providerForNode(solve39, mock0731, dom, servingModelForTask(mounted, "39"));
+  const p44 = providerForNode(solve44, mock0731, dom, servingModelForTask(mounted, "44"));
+  assertEq(p39.model, SERVING_MODEL, "later serving 39: providerForNode is 0731");
+  assertEq(p44.model, CATALOG_JUMP_MODEL, "later serving 44: providerForNode is 0813");
+  assert(
+    dom.current.get("solve")?.provider?.model !== CATALOG_JUMP_MODEL,
+    "I_loop path bound PhysicalNode.provider is not 0813",
+  );
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -1517,6 +1566,7 @@ async function main(): Promise<void> {
     ["I_sku catalog-rebind mounts 0813 (mocked bind, not LoRA)", testCatalogJumpMounts0813],
     ["I_loop does not write S", testILoopDoesNotWriteS],
     ["S is a CatalogPointer beside C, not n.model", testServingPointerBesideC],
+    ["mixed 39/44 later serving typed by S, not sprayed provider", testMixed3944LaterServingTypedByS],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

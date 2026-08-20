@@ -1,6 +1,7 @@
-import { type AgentGraph } from "../ir.js";
+import { findNode, type AgentGraph } from "../ir.js";
 import { RuntimeDOM } from "../reconciler.js";
-import { type Provider } from "../providers.js";
+import { resolveProvider, type Provider } from "../providers.js";
+import { providerForNode } from "../runtime.js";
 import {
   applyILoop,
   computeApplyScope,
@@ -175,6 +176,23 @@ export function servingModelForTask(ctrl: ControlledBatch, taskId: string): stri
     return ctrl.servingSku.sku;
   }
   return ctrl.serving.sku;
+}
+
+/** Later serving client for one task. Reads per-task S; does not use a sprayed bind. */
+export function servingProviderForTask(
+  ctrl: ControlledBatch,
+  taskId: string,
+  fallback: Provider,
+  dom?: RuntimeDOM,
+  key = "solve",
+): Provider {
+  const sku = servingModelForTask(ctrl, taskId);
+  const g = servingGraphForTask(ctrl, taskId);
+  const n = g ? (findNode(g, key) ?? g.root) : undefined;
+  if (!n) {
+    return sku ? resolveProvider(sku) : fallback;
+  }
+  return providerForNode(n, fallback, dom, sku);
 }
 
 export { CATALOG_JUMP_MODEL, recommendIntervention, recommendSliceIntervention };

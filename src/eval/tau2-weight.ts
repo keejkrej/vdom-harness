@@ -206,7 +206,8 @@ export function applyISku(opts: {
   }
 
   bindCatalogProvider(to, opts.provider);
-  if (opts.dom) opts.dom.rebindServing(to, opts.provider);
+  // Do not spray provider onto every PhysicalNode. Mixed 39/44 later serving
+  // picks the client from per-task S (39 → S0, 44 → servingSku).
   const serving = catalogPointer(to);
   const jumped = serving.sku === CATALOG_JUMP_MODEL;
   return {
@@ -234,7 +235,7 @@ export function applyISku(opts: {
 export const applyICatalog = applyISku;
 export const applyIWeightCatalog = applyISku;
 
-/** Later serving step: bound provider from S (DOM / CatalogPointer), not n.model. */
+/** Later serving step: client from S, not a sprayed PhysicalNode.provider. */
 export function servingProviderAfterJump(
   graph: AgentGraph,
   fallback: Provider,

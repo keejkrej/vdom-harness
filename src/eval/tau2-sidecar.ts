@@ -114,6 +114,7 @@ function resetApplyScope(): void {
   servingSku = servingS0;
 }
 
+/** Per-task S pick. Process-level default is not HybridState.S; mixed 39/44 must not leak 0813 onto 39. */
 function servingModelForRequest(taskId?: string, reqModel?: string): string {
   if (taskId && applyScope) {
     if ((applyScope.weighted ?? []).includes(taskId)) return servingSku.sku;

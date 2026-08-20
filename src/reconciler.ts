@@ -190,17 +190,6 @@ export class RuntimeDOM {
     return result;
   }
 
-  /**
-   * Rebind PhysicalNode.provider from S. Does not rewrite C / n.model.
-   * n.model may stay a derived projection; S is the source of truth.
-   */
-  rebindServing(sku: string, provider?: Provider): void {
-    const client = provider ?? resolveProvider(sku);
-    for (const [key, phys] of this.current) {
-      this.current.set(key, { ...phys, provider: client });
-    }
-  }
-
   printOps(ops: ReconcileOp[]): void {
     for (const op of ops) console.log(`  ${formatOp(op)}`);
   }
