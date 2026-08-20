@@ -16,11 +16,12 @@ export const ESCALATE_SKU = CATALOG_JUMP_MODEL;
 export const CATALOG_JUMP_GA = "2026-08-12";
 
 export const CATALOG_JUMP_NOTE =
-  "I_sku is a gated catalog rebind of the serving SKU, not I_weight-as-trainer. " +
-  "Base SKU deepseek/deepseek-v4-flash-0731 until gate=mount rebinds " +
-  "PhysicalNode.provider / n.model to deepseek/deepseek-v4-pro-0813 " +
-  "(OpenRouter, GA 2026-08-12). Jump iff later serving model id is 0813. " +
-  "servingPaused stays false. Catalog rebind, not fine-tuning. FakeTrainer / LoRA are not this arm.";
+  "I_sku is a gated catalog rebind licensed by hung/incomplete, not pick a pricier model. " +
+  "Base SKU deepseek/deepseek-v4-flash-0731. Slow arm proposes " +
+  "deepseek/deepseek-v4-pro-0813 (OpenRouter, GA 2026-08-12). " +
+  "Gate is a measured after-eval; 0813 existing is not a gate. " +
+  "Jump iff later serving model id is 0813. servingPaused stays false. " +
+  "Catalog rebind, not fine-tuning. FakeTrainer / LoRA are not this arm.";
 
 export type CatalogJumpProposal = {
   arm: "I_sku";
@@ -43,7 +44,7 @@ export type CatalogJumpDecision = {
   from: string;
   to: string;
   before: number;
-  after: number;
+  after: number | null;
   reason: string;
   servingPaused: false;
   notPostTraining: true;
@@ -110,15 +111,19 @@ function bindCatalogProvider(to: string, provider?: Provider): void {
   }
 }
 
+function measuredEval(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 /**
- * Slow clock of I_sku: propose escalate SKU 0813, then gate.
- * Mount rebinds n.model + PhysicalNode.provider to 0813. Reject keeps 0731.
- * Catalog rebind, not fine-tuning. Jump iff later serving model id is 0813.
+ * Slow clock of I_sku: propose 0813, then gate on a measured after-eval.
+ * 0813 existing is not a gate. Mount rebinds n.model + provider to 0813.
+ * Reject keeps 0731. Jump iff later serving model id is 0813.
  */
 export function applyISku(opts: {
   graph: AgentGraph;
   before: number;
-  after: number;
+  after?: number | null;
   from?: string;
   to?: string;
   provider?: Provider;
@@ -127,7 +132,8 @@ export function applyISku(opts: {
   const from = opts.from ?? servingModelOfGraph(opts.graph) ?? SERVING_MODEL;
   const to = opts.to ?? CATALOG_JUMP_MODEL;
   const proposal = proposeCatalogJump(from);
-  if (opts.after <= opts.before) {
+  const before = opts.before;
+  if (!measuredEval(opts.after)) {
     return {
       arm: "I_sku",
       kind: "catalog-rebind",
@@ -135,9 +141,30 @@ export function applyISku(opts: {
       jumped: false,
       from,
       to,
-      before: opts.before,
-      after: opts.after,
-      reason: "catalog rebind gate rejected; serving keeps flash-0731 (not fine-tuning)",
+      before,
+      after: null,
+      reason: "no measured after-eval; 0813 existing is not a gate",
+      servingPaused: false,
+      notPostTraining: true,
+      notFineTuning: true,
+      trained: false,
+      graph: opts.graph,
+      graphBefore: opts.graph,
+      servingModelId: servingModelOfGraph(opts.graph, from) ?? from,
+    };
+  }
+  const after = opts.after;
+  if (after <= before) {
+    return {
+      arm: "I_sku",
+      kind: "catalog-rebind",
+      action: "reject",
+      jumped: false,
+      from,
+      to,
+      before,
+      after,
+      reason: "measured after-eval did not beat before; serving keeps flash-0731 (not fine-tuning)",
       servingPaused: false,
       notPostTraining: true,
       notFineTuning: true,
@@ -162,7 +189,7 @@ export function applyISku(opts: {
     to,
     before: opts.before,
     after: opts.after,
-    reason: "catalog rebind gate=mount; rebound serving SKU to pro-0813 (not fine-tuning)",
+    reason: "measured after-eval beat before; rebound n.model/provider to 0813 (not fine-tuning)",
     servingPaused: false,
     notPostTraining: true,
     notFineTuning: true,

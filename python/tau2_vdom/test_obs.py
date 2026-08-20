@@ -13,6 +13,7 @@ from tau2_vdom.kernel_tools import strip_kernel_self_tools
 from tau2_vdom.runner import (
     HungSimulation,
     _obs,
+    control_batch,
     recommend_intervention,
     recommend_slice_intervention,
     serialize_reward_info,
@@ -224,6 +225,20 @@ def test_collect_obs_sets_task_id() -> None:
 def test_typed_arms_hung_hit_policy() -> None:
     hung = _obs([], None, [], hung=True)
     assert hung["arm"] == "I_sku"
+    hung_attractor = _obs(
+        [
+            {
+                "kind": "text",
+                "text": "I cannot cancel this economy reservation; a personal reason is not covered.",
+                "ok": True,
+            }
+        ],
+        0.0,
+        [],
+        hung=True,
+    )
+    assert hung_attractor["inventedPolicy"] is True
+    assert hung_attractor["arm"] == "I_sku"
     hit = _obs(
         [{"kind": "tool", "text": "cancel_reservation", "toolName": "cancel_reservation", "ok": True}],
         1.0,
@@ -337,6 +352,15 @@ def test_post_gate_39_44_obs_batch() -> None:
     assert scope["looped"] == ["39"]
     assert scope["weighted"] == ["44"]
     assert recommend_slice_intervention(batch, loop_exhausted=False) == "I_sku"
+    ctrl = control_batch(batch, loop_exhausted=False)
+    assert ctrl["episodes"][0]["arm"] == "I_loop"
+    assert ctrl["episodes"][1]["arm"] == "I_sku"
+    assert ctrl["episodes"][1]["hung"] is True
+    assert ctrl["episodes"][1]["license"] == "hung"
+    assert ctrl["slice"] == "I_sku"
+    assert ctrl["applyScope"]["waitKept"] == []
+    assert ctrl["servingPaused"] is False
+    assert ctrl["trained"] is False
     blob = " ".join(str(o.get("lastActions")) for o in batch)
     assert "MSJ4OA" not in blob
     assert "S61CZX" not in blob
@@ -344,6 +368,8 @@ def test_post_gate_39_44_obs_batch() -> None:
 
     assert "catalog rebind" in I_SKU_NOTE
     assert "not fine-tuning" in I_SKU_NOTE
+    assert "not pick a pricier model" in I_SKU_NOTE
+    assert "0813 existing is not a gate" in I_SKU_NOTE
     assert CATALOG_JUMP_MODEL == "deepseek/deepseek-v4-pro-0813"
 
 

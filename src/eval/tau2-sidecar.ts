@@ -66,7 +66,7 @@ type SidecarReply = Tau2TurnResponse & {
   servingPaused?: boolean;
   spawned?: boolean;
   done?: boolean;
-  gate?: ReturnType<typeof gateWeightMount> | { arm: "I_sku"; action: "mount" | "reject"; before: number; after: number; reason: string };
+  gate?: ReturnType<typeof gateWeightMount> | { arm: "I_sku"; action: "mount" | "reject"; before: number; after: number | null; reason: string };
   job?: TrainJob;
   path?: "self" | "fallback";
   action?: "wait" | "I_loop";
@@ -219,7 +219,8 @@ async function handle(line: string): Promise<void> {
 
   if (req.op === "i_sku" || req.op === "i_catalog" || req.op === "i_weight_catalog") {
     const before = Number(req.before ?? 0);
-    const after = req.after !== undefined && req.after !== null ? Number(req.after) : before;
+    const after =
+      req.after !== undefined && req.after !== null ? Number(req.after) : undefined;
     const catalog = applyISku({
       graph: req.graph ?? currentGraph,
       before,

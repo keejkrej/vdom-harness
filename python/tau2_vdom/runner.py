@@ -323,9 +323,24 @@ def is_sku_arm(arm: str | None) -> bool:
     return arm in {"I_sku", "I_catalog", "I_weight"}
 
 
+def intervention_license(obs: dict[str, Any], *, loop_exhausted: bool = False) -> str:
+    """License is hung/incomplete, not pick a pricier model."""
+    if obs.get("hung"):
+        return "hung"
+    if obs.get("nSuccessProxy") == 1:
+        return "hit"
+    if is_incomplete_obs(obs):
+        return "incomplete"
+    if loop_exhausted:
+        return "exhausted"
+    return "attractor"
+
+
 def recommend_intervention(obs: dict[str, Any], *, loop_exhausted: bool = False) -> str:
-    """Per-episode arm: hit→wait; hung|crash|no-write→I_sku; completed miss→I_loop."""
-    if obs.get("nSuccessProxy") == 1 and not obs.get("hung"):
+    """Hung is first-class here. Hit→wait; hung|crash|no-write→I_sku; attractor→I_loop."""
+    if obs.get("hung"):
+        return "I_sku"
+    if obs.get("nSuccessProxy") == 1:
         return "wait"
     if is_incomplete_obs(obs):
         return "I_sku"
@@ -339,14 +354,43 @@ def recommend_slice_intervention(
     *,
     loop_exhausted: bool = False,
 ) -> str:
-    """I_sku if ANY episode is incomplete; wait only if every episode hit."""
-    if obs_list and all(o.get("nSuccessProxy") == 1 and not o.get("hung") for o in obs_list):
+    """I_sku if ANY episode is hung or incomplete; wait only if every episode hit."""
+    if any(o.get("hung") for o in obs_list):
+        return "I_sku"
+    if obs_list and all(o.get("nSuccessProxy") == 1 for o in obs_list):
         return "wait"
     if any(is_incomplete_obs(o) for o in obs_list):
         return "I_sku"
     if loop_exhausted:
         return "I_sku"
     return "I_loop"
+
+
+def control_batch(
+    obs_list: list[dict[str, Any]],
+    *,
+    loop_exhausted: bool = False,
+) -> dict[str, Any]:
+    """Landed controller. Hung/incomplete licenses I_sku, not pick a pricier model."""
+    from tau2_vdom.improve import apply_scope_from_obs
+
+    episodes = [
+        {
+            "taskId": o.get("taskId"),
+            "hung": bool(o.get("hung")),
+            "arm": recommend_intervention(o, loop_exhausted=loop_exhausted),
+            "license": intervention_license(o, loop_exhausted=loop_exhausted),
+        }
+        for o in obs_list
+    ]
+    return {
+        "episodes": episodes,
+        "slice": recommend_slice_intervention(obs_list, loop_exhausted=loop_exhausted),
+        "applyScope": apply_scope_from_obs(obs_list),
+        "servingPaused": False,
+        "trained": False,
+        "notFineTuning": True,
+    }
 
 
 def _obs(

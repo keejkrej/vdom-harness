@@ -234,29 +234,46 @@ export function obsNeedsPolicy(obs?: Tau2Obs | Tau2Obs[] | null): boolean {
   return list.some((o) => !isWaitHit(o) && !isIncompleteEpisode(o) && shouldRecommendPolicy(o));
 }
 
+export type InterventionLicense = "hung" | "incomplete" | "hit" | "attractor" | "exhausted";
+
 /**
- * Per-episode arm from traces.
- * Hit → wait. Hung / crash / timeout / no-write → I_sku
- * (gated catalog rebind of the serving SKU; not I_weight-as-trainer).
- * Completed miss with invented-policy / refused-cancel / extra-write (or
- * generic topology) attractor → I_loop. loopExhausted is a fallback to I_sku.
+ * License for the arm. Hung is first-class and is not “pick a pricier model.”
+ */
+export function interventionLicense(
+  obs: Tau2Obs,
+  opts?: { loopExhausted?: boolean },
+): InterventionLicense {
+  if (obs.hung) return "hung";
+  if (obs.nSuccessProxy === 1) return "hit";
+  if (isIncompleteEpisode(obs)) return "incomplete";
+  if (opts?.loopExhausted) return "exhausted";
+  return "attractor";
+}
+
+/**
+ * Per-episode controller. Hung is read here — not deferred until loopExhausted.
+ * Hit → wait. Hung / crash / no-write → I_sku (catalog rebind).
+ * Completed miss + attractor → I_loop. loopExhausted is a fallback to I_sku.
+ * License is hung/incomplete, not “pick a pricier model.”
  */
 export function recommendIntervention(
   obs: Tau2Obs,
   opts?: { loopExhausted?: boolean },
 ): InterventionArm {
-  if (obs.nSuccessProxy === 1 && !obs.hung) return "wait";
+  if (obs.hung) return "I_sku";
+  if (obs.nSuccessProxy === 1) return "wait";
   if (isIncompleteEpisode(obs)) return "I_sku";
   if (opts?.loopExhausted) return "I_sku";
   return "I_loop";
 }
 
-/** Slice-level arm: I_sku if ANY episode is incomplete; wait only if every episode hit. */
+/** Slice-level arm: I_sku if ANY episode is hung or incomplete; wait only if every episode hit. */
 export function recommendSliceIntervention(
   obsList: Tau2Obs[],
   opts?: { loopExhausted?: boolean },
 ): InterventionArm {
-  if (obsList.length > 0 && obsList.every((o) => o.nSuccessProxy === 1 && !o.hung)) {
+  if (obsList.some((o) => o.hung)) return "I_sku";
+  if (obsList.length > 0 && obsList.every((o) => o.nSuccessProxy === 1)) {
     return "wait";
   }
   if (obsList.some((o) => isIncompleteEpisode(o))) return "I_sku";

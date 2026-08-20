@@ -65,6 +65,13 @@ def test_incomplete_fixture_shape() -> None:
 
 def test_catalog_jump_mounts_0813() -> None:
     sidecar = default_sidecar()
+    missing = _sidecar_catalog_jump(sidecar, before=0.0)
+    assert missing["arm"] == "I_sku"
+    assert missing["jumped"] is False
+    assert missing["rejected"] is True
+    assert missing["servingPaused"] is False
+    assert "0813 existing is not a gate" in str(missing.get("catalog") or missing.get("gate") or missing)
+
     reject = _sidecar_catalog_jump(sidecar, before=1.0, after=0.0)
     assert reject["arm"] == "I_sku"
     assert reject["kind"] == "catalog-rebind"

@@ -31,6 +31,7 @@ import { AIRLINE_POLICY_CHECKLIST, shouldRecommendPolicy } from "./tau2-policy.j
 import { GOLD_RESERVATION_IDS, hasGoldReservationId, serializeKernelC } from "./tau2-kernel.js";
 import { formatSelfObsUser, runSelfObs, SELF_OBS_SYSTEM, SELF_OBS_WAIT_HIT_RULES } from "./tau2-self-obs.js";
 import { type Tau2Obs } from "./tau2-types.js";
+import { CONTROLLER_NOTE, controlBatch } from "./tau2-control.js";
 import {
   applyISku,
   CATALOG_JUMP_MODEL,
@@ -1037,6 +1038,19 @@ async function testTypedInterventionArms(): Promise<void> {
     hung: true,
   });
   assertEq(hung, "I_sku", "hung ⇒ I_sku");
+  const hungAttractor = recommendIntervention({
+    nSteps: 2,
+    nSuccessProxy: 0,
+    lastActions: ["cancel_reservation"],
+    channels: ["env"],
+    critique: "",
+    toolFailures: 0,
+    repeatActions: 0,
+    hung: true,
+    inventedPolicy: true,
+    refusedCancel: true,
+  });
+  assertEq(hungAttractor, "I_sku", "hung wins over a loop attractor; hung is not ignored");
 
   const timeout = recommendIntervention({
     nSteps: 0,
@@ -1208,6 +1222,24 @@ async function testPostGate3944Replay(): Promise<void> {
     "slice prefers I_sku because 44 is hung, not I_loop-until-exhausted",
   );
 
+  const ctrl = controlBatch([obs39, obs44], { loopExhausted: false, graph: tau2Graph("one-shot") });
+  assertEq(ctrl.episodes[0]?.arm, "I_loop", "controller: 39 I_loop");
+  assertEq(ctrl.episodes[0]?.license, "attractor", "39 licensed by completed attractor");
+  assertEq(ctrl.episodes[1]?.arm, "I_sku", "controller: 44 I_sku");
+  assertEq(ctrl.episodes[1]?.hung, true, "controller reads hung on 44");
+  assertEq(ctrl.episodes[1]?.license, "hung", "44 licensed by hung, not a pricier model");
+  assertEq(ctrl.slice, "I_sku", "controller slice is the slow arm");
+  assertEq(ctrl.applyScope.waitKept.join(","), "", "controller waitKept=[]");
+  assertEq(ctrl.applyScope.looped.join(","), "39", "controller 39 looped");
+  assertEq(ctrl.applyScope.weighted.join(","), "44", "controller 44 weighted");
+  assertEq(ctrl.proposal?.model, CATALOG_JUMP_MODEL, "slow arm proposes pro-0813");
+  assertEq(ctrl.gate?.action, "reject", "omit after-eval → reject; 0813 existing is not a gate");
+  assert(ctrl.gate?.reason.includes("measured after-eval"), "gate names the missing eval");
+  assertEq(ctrl.servingPaused, false, "controller never pauses serve");
+  assertEq(ctrl.trained, false, "44 did not train");
+  assert(CONTROLLER_NOTE.includes("hung/incomplete"), "controller license is hung/incomplete");
+  assert(CONTROLLER_NOTE.includes("not pick a pricier model"), "not pick a pricier model");
+
   const slow = proposeCatalogJump();
   assertEq(slow.arm, "I_sku", "slow-arm proposal is I_sku");
   assertEq(slow.kind, "catalog-rebind", "44 log is catalog-rebind, not a train");
@@ -1216,6 +1248,7 @@ async function testPostGate3944Replay(): Promise<void> {
   assertEq(slow.servingPaused, false, "catalog-rebind never pauses serve");
   assert(CATALOG_JUMP_NOTE.includes("catalog rebind"), "honest catalog rebind label");
   assert(CATALOG_JUMP_NOTE.includes("not fine-tuning"), "does not claim fine-tuning");
+  assert(CATALOG_JUMP_NOTE.includes("0813 existing is not a gate"), "existence is not a gate");
 
   const prompt = formatSelfObsUser({ graph: tau2Graph("one-shot"), obs: [obs39, obs44] });
   assert(prompt.includes("taskId=39"), "replay prompt lists 39");
@@ -1247,6 +1280,17 @@ async function testCatalogJumpMounts0813(): Promise<void> {
   dom.reconcile(start);
   assertEq(servingModelOfGraph(start), SERVING_MODEL, "pre-gate serving is 0731");
   assertEq(dom.current.get("solve")?.provider?.model, SERVING_MODEL, "PhysicalNode bound to 0731");
+
+  const noEval = applyISku({
+    graph: start,
+    before: 0,
+    provider: mock0813,
+    dom,
+  });
+  assertEq(noEval.action, "reject", "no after-eval rejects");
+  assertEq(noEval.jumped, false, "0813 existing is not a jump");
+  assert(noEval.reason.includes("0813 existing is not a gate"), "existence is not a gate");
+  assertEq(servingModelOfGraph(noEval.graph), SERVING_MODEL, "no-eval keeps 0731");
 
   const reject = applyISku({
     graph: start,

@@ -47,6 +47,7 @@ from tau2_vdom.runner import (
     _obs,
     _pin_tau2_judges,
     is_incomplete_obs,
+    control_batch,
     recommend_intervention,
     recommend_slice_intervention,
     serialize_reward_info,
@@ -81,9 +82,10 @@ INCOMPLETE_FIXTURE_ID = "incomplete_fixture_1"
 SERVING_MODEL = "deepseek/deepseek-v4-flash-0731"
 CATALOG_JUMP_MODEL = "deepseek/deepseek-v4-pro-0813"
 I_SKU_NOTE = (
-    "I_sku is a gated catalog rebind of the serving SKU, not I_weight-as-trainer. "
-    "Base SKU deepseek/deepseek-v4-flash-0731 until gate=mount rebinds "
-    "n.model / provider to deepseek/deepseek-v4-pro-0813 (OpenRouter, GA 2026-08-12). "
+    "I_sku is a gated catalog rebind licensed by hung/incomplete, not pick a pricier model. "
+    "Base SKU deepseek/deepseek-v4-flash-0731. Slow arm proposes "
+    "deepseek/deepseek-v4-pro-0813 (OpenRouter, GA 2026-08-12). "
+    "Gate is a measured after-eval; 0813 existing is not a gate. "
     "Jump iff later serving model id is 0813. servingPaused stays false. "
     "Catalog rebind, not fine-tuning. FakeTrainer and LoRA are not this arm."
 )
@@ -674,6 +676,7 @@ def _round_record(
     self_obs_path: str | None = None,
     self_obs: dict[str, Any] | None = None,
     apply_scope: dict[str, list[str]] | None = None,
+    controller: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rec: dict[str, Any] = {
         "round": round_i,
@@ -700,6 +703,8 @@ def _round_record(
         rec["selfObs"] = self_obs
     if apply_scope is not None:
         rec["applyScope"] = apply_scope
+    if controller is not None:
+        rec["controller"] = controller
     return rec
 
 
@@ -808,7 +813,9 @@ def run_improve(
         if slice_arm == "I_sku":
             current = _p_hit(pass_hat)
             before = 0.0 if current is None else current
-            # Catalog rebind, not fine-tuning. Omit after → gate rejects (no invented win).
+            # License is hung/incomplete. Gate is a measured after-eval, not 0813 exists.
+            # Omit after → reject (no invented win).
+            ctrl = control_batch(obs)
             w = _sidecar_catalog_jump(sidecar, before=before)
             i_sku_report = w
             serving_paused = serving_paused or bool(w.get("servingPaused"))
@@ -830,6 +837,7 @@ def run_improve(
                     ],
                     i_sku=w,
                     apply_scope=apply_scope,
+                    controller=ctrl,
                 )
             )
             stop_reason = "catalog-mounted" if w.get("jumped") else "catalog-rejected"
