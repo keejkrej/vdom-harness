@@ -28,21 +28,25 @@ import {
  * Landed controller.
  * Hung/incomplete licenses I_sku — not “pick a pricier model.”
  * Mixed batches apply BOTH buckets: slice=I_sku does not drop I_loop.
- * S is a CatalogPointer beside C, not n.model and not a rebound sibling graph.
- * Gate is a measured after-eval, not “0813 exists.”
+ * S is a per-episode CatalogPointer beside C, not n.model, not a rebound
+ * sibling graph, and not a process-global servingSku. Gate is a measured
+ * after-eval, not “0813 exists.” Still not a live HybridState.S dump.
  */
 export const CONTROLLER_NOTE =
   "License is hung/incomplete, not pick a pricier model. " +
   "Mixed 39/44 applies BOTH buckets (39 I_loop C1, 44 I_sku); consuming only slice drops I_loop. " +
-  "I_sku writes S (catalog pointer beside C) to deepseek/deepseek-v4-pro-0813 after a measured after-eval; " +
+  "I_sku writes S (per-episode catalog pointer beside C) to deepseek/deepseek-v4-pro-0813 after a measured after-eval; " +
   "0813 existing is not a gate. Jump iff later serving model id is 0813. " +
-  "I_loop never writes S. servingPaused stays false. Catalog rebind, not fine-tuning. No LoRA.";
+  "I_loop never writes any episode's S. A new batch starts at S0 and does not inherit process servingSku. " +
+  "servingPaused stays false. Catalog rebind, not fine-tuning. No LoRA.";
 
 export type ControlledEpisode = {
   taskId?: string;
   hung: boolean;
   arm: InterventionArm;
   license: InterventionLicense;
+  /** Per-episode S. I_loop never writes this. I_sku mount writes only weighted episodes. */
+  serving: CatalogPointer;
 };
 
 export type ControlledBatch = {
@@ -61,9 +65,12 @@ export type ControlledBatch = {
   graphC1?: AgentGraph;
   /** C topology for the weighted bucket (C0). Not a rebound-n.model clone. */
   graphSku?: AgentGraph;
-  /** Paper S0. I_loop never writes this. */
+  /** Paper S0 for this batch. New batches start here; not a leftover process sku. */
   serving: CatalogPointer;
-  /** S after I_sku (0813 if mounted). Weighted serving reads this, not n.model. */
+  /**
+   * I_sku cell result for this batch (0813 if that gate mounted).
+   * Not the per-task source of truth — read episode.serving / servingModelForTask.
+   */
   servingSku: CatalogPointer;
   servingPaused: false;
   trained: false;
@@ -79,6 +86,7 @@ export function controlEpisode(
     hung: Boolean(obs.hung),
     arm: recommendIntervention(obs, opts),
     license: interventionLicense(obs, opts),
+    serving: catalogPointer(SERVING_MODEL),
   };
 }
 
@@ -100,7 +108,8 @@ export function appliedFromScope(scope: ApplyScope): InterventionArm[] {
 
 /**
  * Batch controller. Applies BOTH buckets when a graph is supplied:
- * looped → I_loop (C1); weighted → I_sku writes S (C topology stays C0).
+ * looped → I_loop (C1); weighted → I_sku writes only those episodes' S
+ * (C topology stays C0). A fresh batch starts every episode at S0.
  * Omit after → sku reject. Fixture after=before+ε may mount.
  */
 export function controlBatch(
@@ -112,23 +121,27 @@ export function controlBatch(
     after?: number | null;
     provider?: Provider;
     dom?: RuntimeDOM;
+    /** S0 for this batch only. Not a leftover process servingSku. */
     serving?: CatalogPointer;
   },
 ): ControlledBatch {
-  const episodes = obsList.map((o) => controlEpisode(o, opts));
+  const s0 = opts?.serving ?? catalogPointer(SERVING_MODEL);
+  const episodes = obsList.map((o) => ({
+    ...controlEpisode(o, opts),
+    serving: catalogPointer(s0.sku),
+  }));
   const slice = recommendSliceIntervention(obsList, opts);
   const applyScope = computeApplyScope(obsList);
   const buckets = bucketsFromEpisodes(episodes);
   const applied = appliedFromScope(applyScope);
-  const serving = opts?.serving ?? catalogPointer(SERVING_MODEL);
   const out: ControlledBatch = {
     episodes,
     slice,
     buckets,
     applied,
     applyScope,
-    serving,
-    servingSku: serving,
+    serving: catalogPointer(s0.sku),
+    servingSku: catalogPointer(s0.sku),
     servingPaused: false,
     trained: false,
     notFineTuning: true,
@@ -138,11 +151,11 @@ export function controlBatch(
   if (opts?.graph && applyScope.looped.length > 0) {
     out.loop = applyILoop(opts.graph, obsList);
     out.graphC1 = out.loop.applied ? out.loop.graphAfter : opts.graph;
-    // I_loop mutates C only. S stays serving / servingSku.
+    // I_loop mutates C only. No episode's S is written.
   }
 
   if (applyScope.weighted.length > 0 || slice === "I_sku") {
-    out.proposal = proposeCatalogJump(serving.sku);
+    out.proposal = proposeCatalogJump(s0.sku);
     if (opts?.graph) {
       out.gate = applyISku({
         graph: opts.graph,
@@ -150,13 +163,49 @@ export function controlBatch(
         after: opts.after,
         provider: opts.provider,
         dom: opts.dom,
-        serving,
+        serving: catalogPointer(s0.sku),
       });
       out.servingSku = out.gate.serving;
       out.graphSku = out.gate.graph;
+      if (out.gate.action === "mount") {
+        writeISkuServing(out.episodes, applyScope.weighted, out.gate.serving);
+      }
     }
   }
   return out;
+}
+
+/** I_sku mount writes only the weighted episodes' S. I_loop never calls this. */
+export function writeISkuServing(
+  episodes: ControlledEpisode[],
+  weighted: string[],
+  serving: CatalogPointer,
+): void {
+  for (const e of episodes) {
+    if (e.taskId && weighted.includes(e.taskId)) {
+      e.serving = catalogPointer(serving.sku);
+    }
+  }
+}
+
+/** JSON/controller log: 39.sku=0731 44.sku=0813 after a fixture mount. */
+export function controllerServingLog(ctrl: ControlledBatch): {
+  text: string;
+  tasks: Record<string, CatalogPointer>;
+} {
+  const tasks: Record<string, CatalogPointer> = {};
+  const parts: string[] = [];
+  for (const e of ctrl.episodes) {
+    if (!e.taskId) continue;
+    tasks[e.taskId] = e.serving;
+    const tag = e.serving.sku.includes("0813")
+      ? "0813"
+      : e.serving.sku.includes("0731")
+        ? "0731"
+        : e.serving.sku;
+    parts.push(`${e.taskId}.sku=${tag}`);
+  }
+  return { text: parts.join(" "), tasks };
 }
 
 /** Serving graph for one task after both buckets. */
@@ -172,9 +221,8 @@ export function servingGraphForTask(ctrl: ControlledBatch, taskId: string): Agen
 }
 
 export function servingModelForTask(ctrl: ControlledBatch, taskId: string): string | undefined {
-  if ((ctrl.applyScope.weighted ?? []).includes(taskId)) {
-    return ctrl.servingSku.sku;
-  }
+  const ep = ctrl.episodes.find((e) => e.taskId === taskId);
+  if (ep) return ep.serving.sku;
   return ctrl.serving.sku;
 }
 

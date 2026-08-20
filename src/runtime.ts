@@ -77,9 +77,10 @@ function buildUser(
 }
 
 /**
- * Prefer S (per-task CatalogPointer) over a bound PhysicalNode.provider.
+ * Prefer S (per-episode CatalogPointer) over a bound PhysicalNode.provider.
  * Bound is a cache; spraying one client onto every key leaks 0813 onto I_loop.
  * n.model is a derived projection of C, not the paper S coordinate.
+ * Official later-serving helpers must pass S. Omitting servingSku is not a jump.
  */
 export function providerForNode(
   n: AgentNode,

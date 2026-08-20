@@ -132,7 +132,10 @@ def test_catalog_jump_mounts_0813() -> None:
     assert c_topology(graph) == topo_before
     assert "not fine-tuning" in (mount.get("honestNote") or "")
     later = sidecar.request({"op": "ping"})
-    assert later.get("servingModel") == CATALOG_JUMP_MODEL
+    # Process default is S0. The I_sku *cell* wrote 0813; ping is not HybridState.S.
+    assert later.get("servingModel") == SERVING_MODEL
+    assert later.get("serving", {}).get("sku") == SERVING_MODEL
+    assert later.get("servingSku", {}).get("sku") == SERVING_MODEL
     assert later.get("servingPaused") is False
 
 
@@ -168,7 +171,9 @@ def test_isku_writes_s_not_c() -> None:
     assert mount["kind"] == "catalog-rebind"
     assert "not fine-tuning" in (mount.get("honestNote") or "")
     ping = sidecar.request({"op": "ping"})
-    assert ping.get("servingModel") == CATALOG_JUMP_MODEL
+    # Standalone catalog jump has no weighted episode; process servingSku is not truth.
+    assert ping.get("servingModel") == SERVING_MODEL
+    assert ping.get("servingSku", {}).get("sku") == SERVING_MODEL
     assert ping.get("servingPaused") is False
 
 

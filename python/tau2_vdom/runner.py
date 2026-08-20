@@ -380,6 +380,7 @@ def control_batch(
             "hung": bool(o.get("hung")),
             "arm": recommend_intervention(o, loop_exhausted=loop_exhausted),
             "license": intervention_license(o, loop_exhausted=loop_exhausted),
+            "serving": {"sku": DEFAULT_MODEL, "servingPaused": False},
         }
         for o in obs_list
     ]
