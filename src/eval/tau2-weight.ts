@@ -20,7 +20,7 @@ export const CATALOG_JUMP_NOTE =
   "Base SKU deepseek/deepseek-v4-flash-0731 until gate=mount rebinds " +
   "PhysicalNode.provider / n.model to deepseek/deepseek-v4-pro-0813 " +
   "(OpenRouter, GA 2026-08-12). Jump iff later serving model id is 0813. " +
-  "servingPaused stays false. Not fine-tuning. FakeTrainer / LoRA are not this arm.";
+  "servingPaused stays false. Catalog rebind, not fine-tuning. FakeTrainer / LoRA are not this arm.";
 
 export type CatalogJumpProposal = {
   arm: "I_sku";
