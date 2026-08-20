@@ -88,13 +88,27 @@ export type Tau2Obs = {
 };
 
 /**
+ * Paper S — serving catalog pointer, held beside C.
+ * Specified state is X=(H,M,E,C,S). S is not AgentNode.model (that field is C,
+ * or a derived projection for PhysicalNode.provider).
+ * I_loop never writes S. I_sku mount writes only S.
+ */
+export type CatalogPointer = {
+  sku: string;
+  servingPaused: false;
+};
+
+export type ServingSku = CatalogPointer;
+
+/**
  * Mixed-batch split:
- * wait+hit keep C0; completed I_loop miss get C1; incomplete / I_sku keep C0.
+ * wait+hit keep C0; completed I_loop miss get C1; incomplete / I_sku keep C0
+ * topology and read S (not n.model) for the serving SKU.
  */
 export type ApplyScope = {
   waitKept: string[];
   looped: string[];
-  /** Hung / timeout / transfer / no-write. Same graph as waitKept (C0), typed separately. */
+  /** Hung / timeout / transfer / no-write. C topology stays C0; serving reads S. */
   weighted: string[];
 };
 

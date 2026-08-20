@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from tau2_vdom.improve import (
+    CATALOG_JUMP_MODEL,
+    SERVING_MODEL,
     _collect_obs,
+    _sidecar_catalog_jump,
     _task_p_hit,
     apply_scope_from_obs,
     missed_tool_names_only,
     pass_hat_k_from_rewards,
 )
+from tau2_vdom.sidecar import default_sidecar
 from tau2_vdom.kernel_tools import strip_kernel_self_tools
 from tau2_vdom.runner import (
     HungSimulation,
@@ -369,16 +373,117 @@ def test_post_gate_39_44_obs_batch() -> None:
     assert ctrl["applyScope"]["waitKept"] == []
     assert ctrl["servingPaused"] is False
     assert ctrl["trained"] is False
+    assert ctrl["serving"]["sku"] == SERVING_MODEL
+    assert ctrl["servingSku"]["sku"] == SERVING_MODEL
     blob = " ".join(str(o.get("lastActions")) for o in batch)
     assert "MSJ4OA" not in blob
     assert "S61CZX" not in blob
-    from tau2_vdom.improve import CATALOG_JUMP_MODEL, I_SKU_NOTE
+    from tau2_vdom.improve import I_SKU_NOTE
 
     assert "catalog rebind" in I_SKU_NOTE
     assert "not fine-tuning" in I_SKU_NOTE
     assert "not pick a pricier model" in I_SKU_NOTE
     assert "0813 existing is not a gate" in I_SKU_NOTE
     assert CATALOG_JUMP_MODEL == "deepseek/deepseek-v4-pro-0813"
+
+
+def test_i_loop_does_not_change_s() -> None:
+    sidecar = default_sidecar()
+    sidecar.request({"op": "set_technique", "technique": "one-shot"})
+    miss39 = {
+        "taskId": "39",
+        "nSteps": 4,
+        "nSuccessProxy": 0,
+        "lastActions": ["cancel_reservation"],
+        "channels": ["env"],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_loop",
+        "refusedCancel": True,
+        "inventedPolicy": True,
+        "hung": False,
+        "techniqueRecommendation": "policy-checklist",
+        "missedActions": [{"name": "cancel_reservation"}],
+    }
+    loop = sidecar.request({"op": "i_loop", "obs": [miss39], "model": "deterministic"})
+    assert loop.get("applied") is True
+    assert loop.get("servingPaused") is False
+    assert loop.get("serving", {}).get("sku") == SERVING_MODEL
+    assert loop.get("servingSku", {}).get("sku") == SERVING_MODEL
+    assert loop.get("servingModel") == SERVING_MODEL
+
+
+def test_mixed_3944_s_not_identified_with_c() -> None:
+    sidecar = default_sidecar()
+    sidecar.request({"op": "set_technique", "technique": "one-shot"})
+    obs39 = {
+        "taskId": "39",
+        "nSteps": 4,
+        "nSuccessProxy": 0,
+        "lastActions": ["cancel_reservation"],
+        "channels": ["env"],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_loop",
+        "refusedCancel": True,
+        "inventedPolicy": True,
+        "hung": False,
+        "techniqueRecommendation": "policy-checklist",
+        "missedActions": [{"name": "cancel_reservation"}],
+    }
+    obs44 = {
+        "taskId": "44",
+        "nSteps": 0,
+        "nSuccessProxy": 0,
+        "lastActions": [],
+        "channels": [],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_sku",
+        "hung": True,
+        "termination": "timeout",
+    }
+    loop = sidecar.request({"op": "i_loop", "obs": [obs39, obs44], "model": "deterministic"})
+    scope = loop.get("applyScope") or {}
+    assert scope.get("waitKept") == []
+    assert scope.get("looped") == ["39"]
+    assert scope.get("weighted") == ["44"]
+    assert loop.get("servingSku", {}).get("sku") == SERVING_MODEL
+
+    mount = _sidecar_catalog_jump(sidecar, before=0.0, after=1e-6)
+    assert mount["servingPaused"] is False
+    assert mount["trained"] is False
+    assert mount["serving"]["sku"] == CATALOG_JUMP_MODEL
+    solve = (mount.get("graph") or {}).get("root") or {}
+    assert solve.get("model") in {None, SERVING_MODEL}
+
+    turn44 = sidecar.request(
+        {
+            "op": "turn",
+            "taskId": "44",
+            "model": "deterministic",
+            "policy": "",
+            "tools": [],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+    assert turn44.get("servingModel") == CATALOG_JUMP_MODEL
+    assert turn44.get("servingPaused") is False
+    turn39 = sidecar.request(
+        {
+            "op": "turn",
+            "taskId": "39",
+            "model": "deterministic",
+            "policy": "",
+            "tools": [],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+    assert turn39.get("servingModel") == SERVING_MODEL
+    assert turn39.get("servingPaused") is False
 
 
 def test_hit_still_waits() -> None:
@@ -406,6 +511,8 @@ def main() -> int:
         test_apply_scope_mixed_wait_hit,
         test_collect_obs_sets_task_id,
         test_post_gate_39_44_obs_batch,
+        test_i_loop_does_not_change_s,
+        test_mixed_3944_s_not_identified_with_c,
         test_hit_still_waits,
     ]
     failed = 0

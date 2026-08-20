@@ -22,6 +22,32 @@ from tau2_vdom.improve import (
 from tau2_vdom.sidecar import default_sidecar
 
 
+def c_topology(graph: dict) -> list[dict]:
+    out: list[dict] = []
+
+    def walk(n: dict) -> None:
+        if not n:
+            return
+        out.append(
+            {
+                "key": n.get("key"),
+                "objective": n.get("objective") or "",
+                "prompt": n.get("prompt") or "",
+            }
+        )
+        for child in n.get("children") or []:
+            walk(child)
+
+    walk((graph or {}).get("root") or {})
+    return out
+
+
+def _reset_sidecar():
+    sidecar = default_sidecar()
+    sidecar.request({"op": "set_technique", "technique": "one-shot"})
+    return sidecar
+
+
 def test_incomplete_picker() -> None:
     hung = SimpleNamespace(
         task_id="41",
@@ -64,12 +90,17 @@ def test_incomplete_fixture_shape() -> None:
 
 
 def test_catalog_jump_mounts_0813() -> None:
-    sidecar = default_sidecar()
+    sidecar = _reset_sidecar()
+    before_state = sidecar.request({"op": "get_state"})
+    graph_before = before_state.get("graph") or {}
+    topo_before = c_topology(graph_before)
+
     missing = _sidecar_catalog_jump(sidecar, before=0.0)
     assert missing["arm"] == "I_sku"
     assert missing["jumped"] is False
     assert missing["rejected"] is True
     assert missing["servingPaused"] is False
+    assert missing["serving"]["sku"] == SERVING_MODEL
     assert "0813 existing is not a gate" in str(missing.get("catalog") or missing.get("gate") or missing)
 
     reject = _sidecar_catalog_jump(sidecar, before=1.0, after=0.0)
@@ -80,6 +111,7 @@ def test_catalog_jump_mounts_0813() -> None:
     assert reject["rejected"] is True
     assert reject["servingPaused"] is False
     assert reject["servingModel"] == SERVING_MODEL
+    assert reject["serving"]["sku"] == SERVING_MODEL
     assert reject["proposed"] == CATALOG_JUMP_MODEL
     assert "catalog rebind" in reject["honestNote"]
     assert "not fine-tuning" in reject["honestNote"]
@@ -93,10 +125,51 @@ def test_catalog_jump_mounts_0813() -> None:
     assert mount["mounted"] is True
     assert mount["servingPaused"] is False
     assert mount["servingModel"] == CATALOG_JUMP_MODEL
+    assert mount["serving"]["sku"] == CATALOG_JUMP_MODEL
     graph = mount.get("graph") or (mount.get("catalog") or {}).get("graph") or {}
     solve = (graph or {}).get("root") or {}
-    assert solve.get("model") == CATALOG_JUMP_MODEL
+    assert solve.get("model") in {None, SERVING_MODEL}
+    assert c_topology(graph) == topo_before
     assert "not fine-tuning" in (mount.get("honestNote") or "")
+    later = sidecar.request({"op": "ping"})
+    assert later.get("servingModel") == CATALOG_JUMP_MODEL
+    assert later.get("servingPaused") is False
+
+
+def test_isku_writes_s_not_c() -> None:
+    """MUST-HOLD: I_sku mount writes S only. C topology stays. Omit after keeps 0731."""
+    sidecar = _reset_sidecar()
+    start = sidecar.request({"op": "get_state"})
+    graph_before = start.get("graph") or {}
+    topo_before = c_topology(graph_before)
+    assert start.get("servingSku", {}).get("sku") == SERVING_MODEL
+
+    omit = _sidecar_catalog_jump(sidecar, before=0.0)
+    assert omit["rejected"] is True
+    assert omit["jumped"] is False
+    assert omit["servingPaused"] is False
+    assert omit["serving"]["sku"] == SERVING_MODEL
+    assert "0813 existing is not a gate" in str(omit.get("catalog") or omit.get("gate") or omit)
+
+    reject = _sidecar_catalog_jump(sidecar, before=1.0, after=0.0)
+    assert reject["serving"]["sku"] == SERVING_MODEL
+    assert reject["servingModel"] == SERVING_MODEL
+    assert reject["servingPaused"] is False
+
+    mount = _sidecar_catalog_jump(sidecar, before=0.0, after=1.0)
+    graph = mount.get("graph") or {}
+    assert c_topology(graph) == topo_before
+    solve = (graph.get("root") or {})
+    assert solve.get("model") in {None, SERVING_MODEL}
+    assert mount["serving"]["sku"] == CATALOG_JUMP_MODEL
+    assert mount["servingModel"] == CATALOG_JUMP_MODEL
+    assert mount["servingPaused"] is False
+    assert mount["trained"] is False
+    assert mount["kind"] == "catalog-rebind"
+    assert "not fine-tuning" in (mount.get("honestNote") or "")
+    ping = sidecar.request({"op": "ping"})
+    assert ping.get("servingModel") == CATALOG_JUMP_MODEL
+    assert ping.get("servingPaused") is False
 
 
 def test_weight_fixture_writes_report() -> None:
@@ -131,6 +204,7 @@ def main() -> int:
         test_incomplete_picker,
         test_incomplete_fixture_shape,
         test_catalog_jump_mounts_0813,
+        test_isku_writes_s_not_c,
         test_weight_fixture_writes_report,
     ]
     failed = 0

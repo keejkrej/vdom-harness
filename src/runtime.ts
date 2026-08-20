@@ -76,12 +76,18 @@ function buildUser(
   return parts.join("\n\n");
 }
 
-/** Prefer the physical node's bound client; else resolve from n.model; else fallback. */
+/**
+ * Prefer S (per-task CatalogPointer) over a bound PhysicalNode.provider.
+ * Bound is a cache; spraying one client onto every key leaks 0813 onto I_loop.
+ * n.model is a derived projection of C, not the paper S coordinate.
+ */
 export function providerForNode(
   n: AgentNode,
   fallback: Provider,
   dom?: RuntimeDOM,
+  servingSku?: string,
 ): Provider {
+  if (servingSku) return resolveProvider(servingSku);
   const bound = dom?.current.get(n.key)?.provider;
   if (bound) return bound;
   if (modelId(n.model) != null) return resolveProvider(n.model);
@@ -93,6 +99,7 @@ export async function runGraph(
   task: string,
   provider: Provider,
   dom?: RuntimeDOM,
+  servingSku?: string,
 ): Promise<RunResult> {
   if (dom) dom.reconcile(g);
 
@@ -107,10 +114,10 @@ export async function runGraph(
       { role: "system", content: buildSystem(n) },
       { role: "user", content: buildUser(task, parentOutputs, allMemories(), traces) },
     ];
-    const client = providerForNode(n, provider, dom);
+    const client = providerForNode(n, provider, dom, servingSku);
     const output = await client.complete(msgs, {
       role: n.role,
-      model: modelId(n.model),
+      model: servingSku ?? client.model ?? modelId(n.model),
     });
     outputs[n.key] = output;
     const trace: Trace = {

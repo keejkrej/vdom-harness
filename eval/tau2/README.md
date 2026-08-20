@@ -21,7 +21,7 @@ PYTHONPATH=python python3 -m tau2_vdom.improve
 # or: npm run eval:tau2:improve
 ```
 
-Writes `eval/tau2/latest-improve.json`: `rounds[]` with `pHit`, `passHatK`, `taskPHit`, `obs`, `intervention`, `graphDiff` per round. `--max-rounds` is the improve budget (default 4). Incomplete / hung episodes fire `I_sku` (propose pro-0813, gate, rebind `n.model` / provider; catalog rebind, not fine-tuning). `--weight-fixture` is the `I_weight` TrainJob stub — not a catalog jump and not a θ win. Serving does not pause.
+Writes `eval/tau2/latest-improve.json`: `rounds[]` with `pHit`, `passHatK`, `taskPHit`, `obs`, `intervention`, `graphDiff` per round. `--max-rounds` is the improve budget (default 4). Incomplete / hung episodes fire `I_sku` (propose pro-0813, gate, write serving pointer `S` beside `C`; catalog rebind, not fine-tuning). `--weight-fixture` is the `I_weight` TrainJob stub — not a catalog jump and not a θ win. Serving does not pause.
 
 Measured (deterministic, no key, official tau2 evaluator):
 

@@ -87,6 +87,7 @@ I_SKU_NOTE = (
     "deepseek/deepseek-v4-pro-0813 (OpenRouter, GA 2026-08-12). "
     "Gate is a measured after-eval; 0813 existing is not a gate. "
     "Jump iff later serving model id is 0813. servingPaused stays false. "
+    "I_sku writes S (catalog pointer beside C), not n.model. "
     "Catalog rebind, not fine-tuning. FakeTrainer and LoRA are not this arm."
 )
 I_CATALOG_NOTE = I_SKU_NOTE
@@ -549,7 +550,7 @@ def _sidecar_catalog_jump(
     before: float,
     after: float | None = None,
 ) -> dict[str, Any]:
-    """I_sku actuator: propose pro-0813, gate, maybe rebind. Catalog rebind, not fine-tuning."""
+    """I_sku actuator: propose pro-0813, gate, maybe write S. Catalog rebind, not fine-tuning."""
     req: dict[str, Any] = {
         "op": "i_sku",
         "model": CATALOG_JUMP_MODEL,
@@ -576,6 +577,9 @@ def _sidecar_catalog_jump(
         "rejected": not mounted,
         "servingPaused": bool(res.get("servingPaused")) or bool(ping.get("servingPaused")),
         "servingModel": res.get("servingModel") or catalog.get("servingModelId") or SERVING_MODEL,
+        "serving": res.get("serving")
+        or catalog.get("serving")
+        or {"sku": res.get("servingModel") or SERVING_MODEL, "servingPaused": False},
         "gate": res.get("gate") or {},
         "catalog": catalog,
         "graph": res.get("graph") or catalog.get("graph"),

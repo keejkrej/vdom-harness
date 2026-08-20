@@ -3,8 +3,8 @@
  * Logs go to stderr so stdout stays machine-readable.
  *
  * Fast clock: set_technique / i_loop / turn keep answering.
- * I_sku (i_sku) is the slow arm: propose pro-0813, gate, rebind n.model
- * (catalog rebind, not I_weight-as-trainer, not fine-tuning).
+ * I_sku (i_sku) is the slow arm: propose pro-0813, gate, write S
+ * (catalog pointer beside C; not n.model; not I_weight-as-trainer).
  * servingPaused is always false. FakeTrainer / i_weight_* are stubs.
  */
 import { createProvider, DeterministicProvider, resolveProvider, type Message, type ToolSpec } from "../providers.js";
@@ -30,7 +30,12 @@ import {
 } from "../trainer.js";
 import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
-import { applyISku, servingModelOfGraph } from "./tau2-weight.js";
+import {
+  applyISku,
+  catalogPointer,
+  SERVING_MODEL,
+  type CatalogPointer,
+} from "./tau2-weight.js";
 import { runSelfObs } from "./tau2-self-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { createInterface } from "node:readline";
@@ -76,6 +81,8 @@ type SidecarReply = Tau2TurnResponse & {
   applyScope?: ApplyScope;
   jumped?: boolean;
   servingModel?: string;
+  serving?: CatalogPointer;
+  servingSku?: CatalogPointer;
   trained?: false;
   catalog?: ReturnType<typeof applyISku>;
 };
@@ -93,12 +100,29 @@ let graphC0: AgentGraph = currentGraph;
 let graphC1: AgentGraph | undefined;
 let graphSku: AgentGraph | undefined;
 let applyScope: ApplyScope | undefined;
+/** Paper S0. I_loop never writes this. */
+let servingS0: CatalogPointer = catalogPointer(SERVING_MODEL);
+/** S after I_sku. Later serving / weighted tasks read this, not n.model. */
+let servingSku: CatalogPointer = servingS0;
 
 function resetApplyScope(): void {
   applyScope = undefined;
   graphC1 = undefined;
   graphSku = undefined;
   graphC0 = currentGraph;
+  servingS0 = catalogPointer(SERVING_MODEL);
+  servingSku = servingS0;
+}
+
+/** Per-task S pick. Process-level default is not HybridState.S; mixed 39/44 must not leak 0813 onto 39. */
+function servingModelForRequest(taskId?: string, reqModel?: string): string {
+  if (taskId && applyScope) {
+    if ((applyScope.weighted ?? []).includes(taskId)) return servingSku.sku;
+    if (applyScope.looped.includes(taskId) || applyScope.waitKept.includes(taskId)) {
+      return servingS0.sku;
+    }
+  }
+  return servingSku.sku || reqModel || SERVING_MODEL;
 }
 
 function liveGraph(taskId?: string, reqGraph?: AgentGraph): AgentGraph {
@@ -145,6 +169,9 @@ async function handle(line: string): Promise<void> {
       content: "pong",
       technique: currentTechnique,
       servingPaused: false,
+      serving: servingS0,
+      servingSku,
+      servingModel: servingSku.sku,
     });
     return;
   }
@@ -156,6 +183,9 @@ async function handle(line: string): Promise<void> {
       technique: currentTechnique,
       graph: currentGraph,
       servingPaused: false,
+      serving: servingS0,
+      servingSku,
+      servingModel: servingSku.sku,
     });
     return;
   }
@@ -169,6 +199,9 @@ async function handle(line: string): Promise<void> {
       technique: currentTechnique,
       graph: currentGraph,
       servingPaused: false,
+      serving: servingS0,
+      servingSku,
+      servingModel: servingSku.sku,
     });
     return;
   }
@@ -216,6 +249,9 @@ async function handle(line: string): Promise<void> {
       rationale: result.rationale,
       applied: result.applied,
       applyScope: result.applyScope,
+      serving: servingS0,
+      servingSku,
+      servingModel: servingSku.sku,
     });
     return;
   }
@@ -228,11 +264,12 @@ async function handle(line: string): Promise<void> {
       graph: req.graph ?? currentGraph,
       before,
       after,
+      serving: servingSku,
     });
     if (catalog.action === "mount") {
-      // Sibling SKU graph for the weighted bucket. Do not overwrite C0 —
-      // wait-hit isolation would then either leak 0813 to hits or serve 44 on unrebound C0.
+      // C topology stays C0. S is the pointer. Do not overwrite C0 n.model.
       graphSku = catalog.graph;
+      servingSku = catalog.serving;
     }
     write({
       op: "ok",
@@ -240,6 +277,8 @@ async function handle(line: string): Promise<void> {
       servingPaused: false,
       jumped: catalog.jumped,
       servingModel: catalog.servingModelId,
+      serving: catalog.serving,
+      servingSku: catalog.serving,
       catalog,
       trained: false,
       gate: {
@@ -338,7 +377,7 @@ async function handle(line: string): Promise<void> {
       reqTechnique: req.technique,
       currentTechnique,
     });
-    const servingModel = servingModelOfGraph(live, req.model);
+    const servingModel = servingModelForRequest(req.taskId, req.model);
     const provider =
       servingModel === "deterministic" || servingModel === "scripted" || req.model === "deterministic"
         ? new DeterministicProvider(servingModel)
@@ -383,7 +422,9 @@ async function handle(line: string): Promise<void> {
       graph: currentGraph,
       graphEdits: result.graphEdits,
       servingPaused: false,
-      servingModel: servingModelOfGraph(result.graph, servingModel),
+      servingModel,
+      serving: servingSku,
+      servingSku,
     });
   } catch (err) {
     write({
