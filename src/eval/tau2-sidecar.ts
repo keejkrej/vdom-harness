@@ -76,6 +76,7 @@ type SidecarReply = Tau2TurnResponse & {
   applyScope?: ApplyScope;
   jumped?: boolean;
   servingModel?: string;
+  trained?: false;
   catalog?: ReturnType<typeof applyICatalog>;
 };
 
