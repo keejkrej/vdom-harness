@@ -257,7 +257,7 @@ function readingFor(report: Pick<IskuMountCellReport, "jumped" | "rejected" | "s
     "Protocol cell, not a score. Replay of saved live hung-44 traces through the " +
     "I_sku controller with fixture after (not omit-after #12 reject); S for 44 " +
     `may be 0813. Live 0813 serve did not jump: ${why}. ` +
-    "Serving id not faked. Not invented p_hit(0813). Not a τ² lift."
+    "Not invented p_hit(0813). Not a τ² lift."
   );
 }
 
