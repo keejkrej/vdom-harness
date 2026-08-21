@@ -57,6 +57,10 @@ Official post-gate 39/44 log (replay falsifier, not a live 0813 vs 0731 table): 
 
 Honest I_sku reject cell (controller replay of saved live hung-44 traces; omit after; `nTurns=9` is one hung trial, not nine hangs; not a new timeout; not a result): `improve-live-0731-isku-44-reject.json`.
 
+Live closed-loop Obs cell (not #12). One official airline 0731 episode (task 44); hung-first Obs on **those** traces. Measured keyed run `1c3528c`: episode completed (`obs.arm=I_loop`, `user_stop`); `freshHang=false`; **hole still open**. I_sku not licensed. `controllerReplay=false`. Not a score, not a hang, not a dump: `improve-live-0731-hang-obs-isku.json`.
+
+Later live timeout on the same path (`r6`): hung-first Obs chose `I_sku`; omit after; gate rejected; serving stayed 0731; `pHit0813=null`; `controllerReplay=false`. Not a score. Does not rewrite the `1c3528c` no-hang packet: `improve-live-0731-hang-obs-isku-r6.json`.
+
 Honest I_sku mount protocol cell (same hung-44 license as the #12 reject; I_sku WITH fixture after; then one live 0813 serve). Not a τ² lift, not invented `p_hit(0813)`, not a Pro-vs-Flash score: `improve-live-0731-isku-44-mount.json`.
 
 X_n.S dump after that licensed write (critic hole (1) after #15). S is on the HybridState object. Not a score, not a new 0813 serve, not assembled from `servingByTask`: `hybrid-state-s-dump.json`.
@@ -76,6 +80,12 @@ npm run eval:tau2:hybrid-state-s-dump
 npm run eval:tau2:hybrid-state-serving-step-dump
 # or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-serving-step-dump
 # or: npx tsx src/eval/tau2-hybrid-state-serving-step-dump.ts
+
+# Live closed-loop Obs of a FRESH 0731 hang → I_sku (omit after=).
+# Not #12 replay. Needs OPENROUTER_API_KEY for the episode; without it
+# the JSON stays pending (no hang faked).
+npm run eval:tau2:live-hang-obs-isku
+# or: PYTHONPATH=python python3 -m tau2_vdom.improve --live-hang-obs-isku
 ```
 
 Airline `reward_basis` is DB × COMMUNICATE (`communicate_info` is `[]` on 39/44), so score 0 is a DB miss. ACTION / `nl_assertions` are diagnostics only.
