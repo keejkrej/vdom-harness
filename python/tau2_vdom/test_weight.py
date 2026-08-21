@@ -502,8 +502,10 @@ def test_r6_later_timeout_does_not_overwrite_no_hang_packet() -> None:
 def test_live_hang_obs_isku_task_id_writes_new_file() -> None:
     """TASK_ID 39 writes a new file; 44 keeps the historical name; packets stay put."""
     help_text = build_parser().format_help()
-    assert "--live-hang-obs-isku [TASK_ID]" in help_text or "TASK_ID" in help_text
-    assert "improve-live-0731-hang-obs-isku-<TASK_ID>.json" in help_text
+    assert "--live-hang-obs-isku [TASK_ID]" in help_text
+    assert "TASK_ID" in help_text
+    collapsed = " ".join(help_text.split())
+    assert "isku-<TASK_ID>.json" in collapsed or "improve-live-0731-hang-obs-isku-<TASK_ID>.json" in collapsed
     ns_default = build_parser().parse_args(["--live-hang-obs-isku"])
     assert ns_default.live_hang_obs_isku == LIVE_HANG_OBS_ISKU_TASK_DEFAULT
     ns_39 = build_parser().parse_args(
