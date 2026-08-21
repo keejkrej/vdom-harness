@@ -56,6 +56,14 @@ import {
   servingSkuOf,
   thetaJumped,
 } from "./tau2-weight.js";
+import {
+  completedMiss39Obs,
+  hung44LicenseObs,
+  ISKU_REJECT_CELL_FILE,
+  runIskuMountCell,
+  runIskuMountCellController,
+  servingIdIs0813,
+} from "./tau2-isku-mount-cell.js";
 
 let passed = 0;
 let failed = 0;
@@ -1590,6 +1598,78 @@ async function testFreshBatchDoesNotInheritProcessServingSku(): Promise<void> {
   assertEq(omitSku.model, SERVING_MODEL, "omit SKU after prior mount is still not a jump");
 }
 
+async function testIskuMountCellControllerFixtureAfterNoLive(): Promise<void> {
+  const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
+  const mock0731 = new DeterministicProvider(SERVING_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, mock0731);
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const dom = new RuntimeDOM();
+  dom.reconcile(start);
+
+  const obs44 = hung44LicenseObs();
+  const obs39 = completedMiss39Obs();
+  assertEq(obs44.taskId, "44", "license is hung-44");
+  assertEq(obs44.hung, true, "44 hung");
+  assertEq(obs44.arm, "I_sku", "44 I_sku");
+  assertEq(obs39.taskId, "39", "39 completed miss is in the controller");
+  assertEq(obs39.arm, "I_loop", "39 I_loop");
+
+  const { ctrl, after, before } = runIskuMountCellController({
+    provider: mock0813,
+    dom,
+  });
+  assertEq(before, 0, "fixture before=0");
+  assertEq(after, 1, "fixture after=1");
+  assertEq(ctrl.episodes[1]?.arm, "I_sku", "controller: 44 I_sku");
+  assertEq(ctrl.episodes[1]?.license, "hung", "44 licensed by hung");
+  assertEq(ctrl.applyScope.waitKept.join(","), "", "waitKept empty");
+  assertEq(ctrl.applyScope.weighted.join(","), "44", "44 weighted");
+  assertEq(ctrl.applyScope.looped.join(","), "39", "39 looped");
+  assertEq(ctrl.gate?.action, "mount", "fixture after mounts; this is not omit-after #12");
+  assertEq(ctrl.servingPaused, false, "servingPaused stays false");
+  assertEq(ctrl.trained, false, "not a train");
+  assertEq(servingModelForTask(ctrl, "44"), CATALOG_JUMP_MODEL, "S for 44 is 0813");
+  assertEq(servingModelForTask(ctrl, "39"), SERVING_MODEL, "S for 39 stays 0731");
+  assertEq(ctrl.episodes[0]?.serving.sku, SERVING_MODEL, "39.sku=0731");
+  assertEq(ctrl.episodes[1]?.serving.sku, CATALOG_JUMP_MODEL, "44.sku=0813");
+  assertEq(controllerServingLog(ctrl).text, "39.sku=0731 44.sku=0813", "does not spray S");
+  assertEq(findNode(ctrl.graphC0!, "solve")?.model, SERVING_MODEL, "C n.model stays 0731");
+  assert(sameCTopology(ctrl.graphSku ?? start, start), "C topology stays");
+  assertEq(
+    dom.current.get("solve")?.provider?.model,
+    SERVING_MODEL,
+    "does not spray 0813 onto PhysicalNode.provider",
+  );
+  const p39 = servingProviderForTask(ctrl, "39", mock0731, dom);
+  const p44 = servingProviderForTask(ctrl, "44", mock0731, dom);
+  assertEq(p39.model, SERVING_MODEL, "later serving 39 is 0731");
+  assertEq(p44.model, CATALOG_JUMP_MODEL, "later serving 44 is 0813");
+
+  const { report } = await runIskuMountCell({ liveServe: false, provider: mock0813, dom });
+  assertEq(report.protocolCell, true, "report is a protocol cell");
+  assertEq(report.fixtureAfter, true, "labeled fixtureAfter");
+  assertEq(report.incompleteFixture, true, "labeled incompleteFixture");
+  assertEq(report.notTau2Lift, true, "not a τ² lift");
+  assertEq(report.omitAfter, false, "this cell calls I_sku WITH after");
+  assertEq(report.vsRejectCell, ISKU_REJECT_CELL_FILE, "cites #12 reject cell");
+  assertEq(report.gate.action, "mount", "gate.action=mount");
+  assertEq(report.gate.kind, "fixtureAfter", "gate kind is fixtureAfter");
+  assert(report.gate.reason.includes("not a τ² lift"), "gate does not claim airline 0813");
+  assert(report.gate.reason.includes("not measured 0813 on airline"), "does not claim measured 0813");
+  assertEq(report.servingPaused, false, "report servingPaused=false");
+  assertEq(report.pHit0813, null, "does not invent p_hit(0813)");
+  assertEq(report.notInventedPHit0813, true, "notInventedPHit0813");
+  assertEq(report.notFineTuning, true, "notFineTuning");
+  assertEq(report.jumped, false, "no live serve → jumped=false; id not faked");
+  assertEq(report.servingModelAfter, null, "no live serving id");
+  assertEq(report.rejected, true, "controller-only is not an ACCEPT jump");
+  assert(report.reading.toLowerCase().includes("protocol cell"), "reading says protocol cell");
+  assert(report.reading.toLowerCase().includes("not a score") || report.reading.includes("not a score"), "reading says not a score");
+  assertEq(servingIdIs0813(null), false, "null is not a jump");
+  assertEq(servingIdIs0813(CATALOG_JUMP_MODEL), true, "0813 id is a jump predicate");
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -1629,6 +1709,7 @@ async function main(): Promise<void> {
     ["S is a CatalogPointer beside C, not n.model", testServingPointerBesideC],
     ["mixed 39/44 later serving typed by S, not sprayed provider", testMixed3944LaterServingTypedByS],
     ["fresh 39-only batch does not inherit process servingSku=0813", testFreshBatchDoesNotInheritProcessServingSku],
+    ["I_sku mount-cell controller: fixture after, no live, 44=0813 39=0731 no spray", testIskuMountCellControllerFixtureAfterNoLive],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

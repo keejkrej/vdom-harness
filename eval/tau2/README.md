@@ -57,6 +57,15 @@ Official post-gate 39/44 log (replay falsifier, not a live 0813 vs 0731 table): 
 
 Honest I_sku reject cell (controller replay of saved live hung-44 traces; omit after; `nTurns=9` is one hung trial, not nine hangs; not a new timeout; not a result): `improve-live-0731-isku-44-reject.json`.
 
+Honest I_sku mount protocol cell (same hung-44 license as the #12 reject; I_sku WITH fixture after; then one live 0813 serve). Not a τ² lift, not invented `p_hit(0813)`, not a Pro-vs-Flash score: `improve-live-0731-isku-44-mount.json`.
+
+```
+npm test
+PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell
+# or: npm run eval:tau2:isku-mount-cell
+# or: npx tsx src/eval/tau2-isku-mount-cell.ts
+```
+
 Airline `reward_basis` is DB × COMMUNICATE (`communicate_info` is `[]` on 39/44), so score 0 is a DB miss. ACTION / `nl_assertions` are diagnostics only.
 
 Gold (from `.tau2-bench/data/tau2/domains/airline/tasks.json`; the policy node encodes **rules**, never these IDs):

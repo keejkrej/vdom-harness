@@ -29,6 +29,8 @@ export type Message = {
 export type Completion = {
   content: string;
   toolCalls?: ToolCallOut[];
+  /** Actual model id from the client / provider response. Not invented. */
+  servedModel?: string;
 };
 
 export type CompleteOpts = {
@@ -386,9 +388,9 @@ export class DeterministicProvider implements Provider {
   async completeTurn(msgs: Message[], opts?: CompleteOpts): Promise<Completion> {
     const tools = opts?.tools ?? [];
     const scripted = scriptedTau2MockTurn(msgs, tools, { role: opts?.role });
-    if (scripted) return scripted;
+    if (scripted) return { ...scripted, servedModel: scripted.servedModel ?? this.model ?? opts?.model };
     const content = await this.complete(msgs, opts);
-    return { content };
+    return { content, servedModel: this.model ?? opts?.model };
   }
 }
 
@@ -579,6 +581,7 @@ export function scriptedTau2MockTurn(
 }
 
 type ChatCompletionResponse = {
+  model?: string;
   choices?: Array<{
     message?: {
       content?: string | null;
@@ -702,10 +705,14 @@ export class OpenAICompatibleProvider implements Provider {
     const data = (await res.json()) as ChatCompletionResponse;
     const toolCalls = parseToolCalls(data.choices);
     const content = data.choices?.[0]?.message?.content ?? "";
+    const servedModel =
+      typeof data.model === "string" && data.model.length > 0
+        ? data.model
+        : (opts?.model ?? this.model);
     if (toolCalls && toolCalls.length > 0) {
-      return { content: "", toolCalls };
+      return { content: "", toolCalls, servedModel };
     }
-    return { content };
+    return { content, servedModel };
   }
 }
 

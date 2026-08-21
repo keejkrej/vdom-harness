@@ -85,6 +85,11 @@ npm run eval:tau2:improve
 # Not I_weight-as-trainer and not fine-tuning. --weight-fixture is the stub.
 PYTHONPATH=python python3 -m tau2_vdom.improve --weight
 PYTHONPATH=python python3 -m tau2_vdom.improve --weight --weight-fixture
+
+# I_sku mount protocol cell (hung-44 license + fixture after + one live 0813 serve).
+# Not a τ² score. Needs OPENROUTER_API_KEY for the live serve; without it the
+# controller still mounts S for 44 and writes a reject-with-reason JSON.
+PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell
 ```
 
 `eval/tau2/latest-improve.json` records the **sequence** of rounds: `pHit` / `passHatK` / `taskPHit`, Obs, intervention, and graph diff per round. Scores are not invented. If a live slice is already 1.0 under the naive graph, the report stops after the first Obs (`stopReason: saturated`).
