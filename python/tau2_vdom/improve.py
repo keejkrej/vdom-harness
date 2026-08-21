@@ -93,6 +93,7 @@ I_SKU_NOTE = (
 I_CATALOG_NOTE = I_SKU_NOTE
 LIVE_HANG_OBS_ISKU_FILE = "improve-live-0731-hang-obs-isku.json"
 LIVE_HANG_OBS_ISKU_R6_FILE = "improve-live-0731-hang-obs-isku-r6.json"
+LIVE_HANG_OBS_ISKU_39_FILE = "improve-live-0731-hang-obs-isku-39.json"
 LIVE_HANG_OBS_ISKU_TASK_DEFAULT = "44"
 FORBIDDEN_HANG_SOURCES = (
     "improve-live-0731-iweight-44-hung.json",

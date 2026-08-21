@@ -17,4 +17,5 @@ eval/tau2/*.json
 !eval/tau2/hybrid-state-serving-step-dump.json
 !eval/tau2/improve-live-0731-hang-obs-isku.json
 !eval/tau2/improve-live-0731-hang-obs-isku-r6.json
+!eval/tau2/improve-live-0731-hang-obs-isku-39.json
 !eval/tau2/README.md

@@ -105,10 +105,12 @@ import {
   buildLiveHangObsIskuReport,
   FORBIDDEN_HANG_SOURCES,
   GATE_OMIT_AFTER_REASON,
+  LIVE_HANG_OBS_ISKU_39_FILE,
   LIVE_HANG_OBS_ISKU_FILE,
   LIVE_HANG_OBS_ISKU_R6_FILE,
   LIVE_HANG_OBS_ISKU_READING,
   LIVE_HANG_OBS_ISKU_TASK_DEFAULT,
+  liveHangObsIsku39EvalPath,
   liveHangObsIskuEvalPath,
   liveHangObsIskuFilename,
   liveHangObsIskuR6EvalPath,
@@ -2500,8 +2502,10 @@ async function testLiveHangObsIskuTaskIdWritesNewFile(): Promise<void> {
 
   const firstPath = liveHangObsIskuEvalPath();
   const r6Path = liveHangObsIskuR6EvalPath();
+  const landed39Path = liveHangObsIsku39EvalPath();
   const firstBefore = readFileSync(firstPath);
   const r6Before = readFileSync(r6Path);
+  const landed39Before = readFileSync(landed39Path);
   const dest = join(tmpdir(), "improve-live-0731-hang-obs-isku-39.json");
   const pending = pendingLiveHangObsIskuReport("39");
   assertEq(pending.taskIds[0], "39", "pending taskIds is 39");
@@ -2516,6 +2520,7 @@ async function testLiveHangObsIskuTaskIdWritesNewFile(): Promise<void> {
   assertEq(onDisk.pHit0813, null, "dry path does not invent p_hit(0813)");
   assert(readFileSync(firstPath).equals(firstBefore), "did not touch 1c3528c packet");
   assert(readFileSync(r6Path).equals(r6Before), "did not touch r6 packet");
+  assert(readFileSync(landed39Path).equals(landed39Before), "did not touch landed 39 packet");
   expectThrow(
     () => writeLiveHangObsIsku(pending, firstPath),
     "overwrite",
@@ -2524,6 +2529,7 @@ async function testLiveHangObsIskuTaskIdWritesNewFile(): Promise<void> {
   unlinkSync(wrote);
   assert(readFileSync(firstPath).equals(firstBefore), "1c3528c still untouched after cleanup");
   assert(readFileSync(r6Path).equals(r6Before), "r6 still untouched after cleanup");
+  assert(readFileSync(landed39Path).equals(landed39Before), "landed 39 still untouched after cleanup");
 
   const obs = thisEpisodeHungObs("39");
   assertEq(obs.taskId, "39", "THIS episode task 39");
@@ -2547,6 +2553,50 @@ async function testLiveHangObsIskuTaskIdWritesNewFile(): Promise<void> {
   assertEq(hungReport.servingModelAfter, SERVING_MODEL, "serving stays 0731");
   assertEq(hungReport.pHit0813, null, "no invented p_hit(0813)");
   assertEq(hungReport.sourceEval[0], "improve-live-0731-hang-obs-isku-39.json", "default source is the 39 file");
+}
+
+async function testLanded39NoHangDoesNotOverwrite44Packets(): Promise<void> {
+  const first = readLiveHangObsIsku(liveHangObsIskuEvalPath());
+  const r6 = readLiveHangObsIsku(liveHangObsIskuR6EvalPath());
+  const landed = readLiveHangObsIsku(liveHangObsIsku39EvalPath());
+  assertEq(first.hung, false, "1c3528c hung=false stays");
+  assertEq(first.obs.taskId, "44", "1c3528c stays task 44");
+  assertEq(r6.hung, true, "r6 hung=true stays");
+  assertEq(r6.obs.taskId, "44", "r6 stays task 44");
+  assertEq(r6.obs.termination, "timeout", "r6 timeout stays");
+  assertEq(landed.kind, "live-closed-loop-obs", "39 is the live Obs cell");
+  assertEq(landed.pendingKey, false, "39 is measured");
+  assertEq(landed.controllerReplay, false, "39 is not a replay");
+  assertEq(landed.freshHang, false, "39 did not hang");
+  assertEq(landed.hung, false, "39 hung=false");
+  assertEq(landed.holeOpen, true, "39 hole remains open");
+  assertEq(landed.taskIds[0], "39", "39 taskIds");
+  assertEq(landed.obs.taskId, "39", "39 obs.taskId");
+  assertEq(landed.obs.arm, "I_loop", "39 obs.arm is I_loop");
+  assertEq(landed.obs.hung, false, "39 obs.hung is false");
+  assertEq(landed.obs.termination, "user_stop", "39 user_stop");
+  assertEq(landed.obs.nSuccessProxy, 0, "39 nSuccessProxy is 0");
+  assertEq(landed.arm ?? null, null, "I_sku not licensed");
+  assertEq(landed.iSkuRequest, null, "I_sku request did not fire");
+  assertEq(landed.gate.action, null, "gate action null");
+  assertEq(landed.gate.after, null, "gate.after=null");
+  assertEq(landed.omitAfter, true, "omit after=");
+  assertEq(landed.jumped, false, "jumped=false");
+  assertEq(landed.servingPaused, false, "servingPaused=false");
+  assertEq(landed.servingModelAfter, SERVING_MODEL, "serving stays 0731");
+  assertEq(landed.pHit0813, null, "does not invent p_hit(0813)");
+  assertEq(landed.sourceEval[0], LIVE_HANG_OBS_ISKU_39_FILE, "39 sourceEval is this file");
+  assert(
+    landed.sourceEval.some((s) => s.includes("airline-live-one-shot-r1787320701-20260821T135821Z.json")),
+    "39 cites the measured one-shot, not invented onto the PR",
+  );
+  assert(landed.reading.includes("hole remains open"), "39 reading keeps the hole open");
+  assert(!landed.reading.includes("hung-first Obs chose I_sku"), "39 does not claim a hang");
+  assert(!landed.reading.includes("not a new timeout"), "39 is not #12's phrase");
+  const blob = JSON.stringify(landed);
+  for (const name of FORBIDDEN_HANG_SOURCES) {
+    assert(!blob.includes(name), `39 is not ${name} stuffed through Obs`);
+  }
 }
 
 async function testWordReverseUntouched(): Promise<void> {
@@ -2603,6 +2653,7 @@ async function main(): Promise<void> {
     ["#12 reject cell stays controllerReplay; this cell is not a relabel", testRejectCell12StaysControllerReplay],
     ["r6 later timeout does not overwrite 1c3528c no-hang packet", testR6LaterTimeoutDoesNotOverwriteNoHangPacket],
     ["live hang-obs-isku TASK_ID 39 writes a new file", testLiveHangObsIskuTaskIdWritesNewFile],
+    ["landed 39 no-hang does not overwrite 44 packets", testLanded39NoHangDoesNotOverwrite44Packets],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {
