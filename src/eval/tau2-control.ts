@@ -23,7 +23,13 @@ import {
   type CatalogJumpDecision,
   type CatalogJumpProposal,
 } from "./tau2-weight.js";
-import { defaultHybridC, hybridState, writeHybridS } from "./tau2-hybrid-state.js";
+import {
+  defaultHybridC,
+  hybridState,
+  isHung44IskuLicense,
+  writeHybridLicenseE,
+  writeHybridS,
+} from "./tau2-hybrid-state.js";
 
 /**
  * Landed controller.
@@ -96,6 +102,9 @@ export function controlEpisode(
     C: opts?.graph ?? defaultHybridC(s0.sku),
     S: catalogPointer(s0.sku),
   });
+  if (isHung44IskuLicense(obs)) {
+    writeHybridLicenseE(X, obs);
+  }
   return {
     taskId: obs.taskId,
     hung: Boolean(obs.hung),
@@ -211,6 +220,9 @@ export function writeISkuServing(
   for (const e of episodes) {
     if (e.taskId && weighted.includes(e.taskId)) {
       writeHybridS(e.X, serving);
+      if (isHung44IskuLicense(e.X.E) || e.X.licenseE) {
+        writeHybridLicenseE(e.X, e.X.licenseE ?? e.X.E);
+      }
     }
   }
 }

@@ -70,21 +70,34 @@ import {
   HYBRID_STATE_S_DUMP_READING,
   runFresh39AfterMount,
 } from "./tau2-hybrid-state-s-dump.js";
-import { hybridState, requireHybridX, sOnState, writeHybridH, writeHybridM } from "./tau2-hybrid-state.js";
+import {
+  hybridState,
+  licenseEOnState,
+  requireHybridX,
+  servingEOnState,
+  sOnState,
+  writeHybridH,
+  writeHybridM,
+} from "./tau2-hybrid-state.js";
 import {
   assertHonestServingStepE,
+  assertOwnLicenseAndServingE,
+  assertServingEFromX,
   assertServingStepHM,
   buildHybridStateServingStepDump,
-  E_IS_LICENSE_NOT_SERVING,
   GREETING_NOT_LIVE_HUNG,
   hybridStateServingStepDumpPath,
   HYBRID_STATE_SERVING_STEP_DUMP_READING,
+  LEFTOVER_E_IS_LICENSE_PHRASE,
+  LICENSE_E_IS_HUNG_FIXTURE,
   licenseEFromHung44,
   LIVE_HUNG_THEN_SERVED_SMEAR,
   LIVE_TURN_REJECT_NO_KEY,
   SERVING_E_NOTE,
   SERVING_STEP_DUMP_IS_NOT,
   servingEFromGreetingTurn,
+  viewOfServingStep,
+  X_E_IS_SERVING_STEP_FROM_TURN,
   ServingStepMockProvider,
 } from "./tau2-hybrid-state-serving-step-dump.js";
 import { readFileSync } from "node:fs";
@@ -1874,6 +1887,10 @@ async function testHybridStateServingStepDumpAfterLicensedWrite(): Promise<void>
   assertEq(p39.model, SERVING_MODEL, "mixed later serving 39 typed by X.S is 0731");
   assertEq(p44.model, CATALOG_JUMP_MODEL, "mixed later serving 44 typed by X.S is 0813");
 
+  assert(licenseEOnState(X_44), "controlEpisode / I_sku wrote licenseE before the turn");
+  assertEq(X_44.licenseE?.copiedIntoH, false, "licenseE is not copied into H");
+  assertEq(X_44.E.hung, true, "before the greeting, X.E is still the hung license");
+  assert(!servingEOnState(X_44), "servingE is not on X before the greeting turn");
   const beforeH = X_44.H;
   const beforeM = X_44.M;
   const { dump, X_44: dump44, X_39: dump39, turn, sameRef } = await buildHybridStateServingStepDump({
@@ -1921,6 +1938,13 @@ async function testHybridStateServingStepDumpAfterLicensedWrite(): Promise<void>
   assertEq(dump.fresh39.S.sku, SERVING_MODEL, "fresh 39-only X.S is 0731");
   assertEq(dump.liveAirlineImproveLoopOmitsAfter, true, "live airline improveLoop still omits after");
   assertEq(dump.eSplit, "licenseE ≠ servingE", "two names for two facts");
+  assert(licenseEOnState(X_44), "licenseE is an own field on the X the turn mutated");
+  assert(servingEOnState(X_44), "servingE / E is an own field on the X the turn mutated");
+  assertOwnLicenseAndServingE(X_44);
+  assertEq(dump.licenseE, X_44.licenseE, "dump licenseE is X.licenseE");
+  assertEq(dump.servingE, X_44.servingE ?? X_44.E, "dump servingE is X.servingE / X.E");
+  assertEq(dump.X_44.E, X_44.E, "dump X_44.E is the same object the turn wrote");
+  assertEq(dump.X_44.licenseE, X_44.licenseE, "dump X_44.licenseE is X.licenseE");
   assertEq(dump.licenseE.kind, "license", "licenseE is the license name");
   assertEq(dump.licenseE.hung, true, "licenseE is reconstructed hung");
   assertEq(dump.licenseE.termination, "timeout", "licenseE is timeout");
@@ -1928,16 +1952,21 @@ async function testHybridStateServingStepDumpAfterLicensedWrite(): Promise<void>
   assertEq(dump.licenseE.copiedIntoH, false, "licenseE not copied into H");
   assertEq(dump.servingE.kind, "greeting-turn", "servingE is the greeting-turn name");
   assertEq(dump.servingE.hung, false, "after greeting, servingE is not hung");
+  assertEq(X_44.E.hung, false, "after greeting, X.E.hung is not true");
   assertEq(dump.servingE.termination, null, "after greeting, servingE is not timeout");
   assertEq(dump.servingE.note, SERVING_E_NOTE, "servingE is not a τ² user/gym step");
+  assert(dump.servingE.content === turn.content || dump.servingE.ts === turn.traces[0]?.ts || dump.servingE.servedModel === turn.servedModel, "servingE carries a turn-derived fact");
   assertEq(dump.X_44.E, dump.servingE, "X_44.E is servingE, not the hung license");
   assertEq(dump.X_44.licenseE, dump.licenseE, "X_44.licenseE is the license field");
   assert(JSON.stringify(dump.licenseE) !== JSON.stringify(dump.servingE), "licenseE ≠ servingE");
-  assert(dump.reading.includes(E_IS_LICENSE_NOT_SERVING), "reading labels E as license");
+  assert(dump.reading.includes(LICENSE_E_IS_HUNG_FIXTURE), "reading says licenseE is the hung fixture");
+  assert(dump.reading.includes(X_E_IS_SERVING_STEP_FROM_TURN), "reading says X.E is serving-step E from the turn");
   assert(dump.reading.includes(GREETING_NOT_LIVE_HUNG), "reading is greeting, not live hung-44 then served");
-  assert(dump.dumpIsNot.includes(E_IS_LICENSE_NOT_SERVING), "dumpIsNot labels E as license");
-  assert(dump.hung44LicenseObs.includes(E_IS_LICENSE_NOT_SERVING), "hung44LicenseObs labels E as license");
+  assert(!dump.reading.includes(LEFTOVER_E_IS_LICENSE_PHRASE), "reading dropped leftover E-is-license phrase");
+  assert(!dump.dumpIsNot.includes(LEFTOVER_E_IS_LICENSE_PHRASE), "dumpIsNot dropped leftover E-is-license phrase");
+  assert(!dump.hung44LicenseObs.includes(LEFTOVER_E_IS_LICENSE_PHRASE), "hung44LicenseObs dropped leftover E-is-license phrase");
   assertHonestServingStepE(dump);
+  assertServingEFromX(dump, X_44);
   const blob = JSON.stringify(dump.X_44);
   assert(!blob.includes("Reply with the single word pong."), "H/M are not the #15 pong");
   assert(!blob.includes(SOURCE_EVAL[0]!), "H/M are not sourceEval JSON");
@@ -1953,7 +1982,11 @@ function smearServingStepDump(overrides: {
   hung44LicenseObs?: string;
 }): Parameters<typeof assertHonestServingStepE>[0] {
   const licenseE = licenseEFromHung44(hung44LicenseObs());
-  const servingE = servingEFromGreetingTurn();
+  const servingE = servingEFromGreetingTurn({
+    content: "Hello! How can I help you today?",
+    servedModel: CATALOG_JUMP_MODEL,
+    traces: [{ ts: 1787297809272 }],
+  });
   return {
     licenseE: "licenseE" in overrides ? overrides.licenseE : licenseE,
     servingE: "servingE" in overrides ? overrides.servingE : servingE,
@@ -1962,7 +1995,7 @@ function smearServingStepDump(overrides: {
     dumpIsNot: overrides.dumpIsNot ?? SERVING_STEP_DUMP_IS_NOT,
     hung44LicenseObs:
       overrides.hung44LicenseObs ??
-      `reconstructed hung=true/timeout fixture citing sourceEval; ${E_IS_LICENSE_NOT_SERVING}; ${GREETING_NOT_LIVE_HUNG}; not a new 0731 timeout; not copied into H`,
+      `reconstructed hung=true/timeout fixture citing sourceEval; ${LICENSE_E_IS_HUNG_FIXTURE}; ${GREETING_NOT_LIVE_HUNG}; not a new 0731 timeout; not copied into H`,
   };
 }
 
@@ -2004,7 +2037,77 @@ async function testServingStepDumpRefusesESmear(): Promise<void> {
     LIVE_HUNG_THEN_SERVED_SMEAR,
     "dump refuses live hung-44 then served in reading",
   );
+  expectThrow(
+    () =>
+      assertHonestServingStepE(
+        smearServingStepDump({
+          reading: `Serving-step dump: ${LEFTOVER_E_IS_LICENSE_PHRASE}; ${LICENSE_E_IS_HUNG_FIXTURE}; ${X_E_IS_SERVING_STEP_FROM_TURN}; ${GREETING_NOT_LIVE_HUNG}`,
+        }),
+      ),
+    LEFTOVER_E_IS_LICENSE_PHRASE,
+    "dump refuses leftover E is license, not serving-step E",
+  );
+  expectThrow(
+    () =>
+      assertHonestServingStepE(
+        smearServingStepDump({
+          servingE: {
+            kind: "greeting-turn",
+            hung: false,
+            termination: null,
+            notTau2UserGymStep: true,
+            incomingMessages: [],
+            note: SERVING_E_NOTE,
+          },
+        }),
+      ),
+    "turn-derived fact",
+    "dump refuses servingE with no turn-derived fact",
+  );
   assertHonestServingStepE(smearServingStepDump({}));
+}
+
+async function testServingStepDumpRefusesOverlayAndMissingOwnFields(): Promise<void> {
+  const { ctrl } = runIskuMountCellController();
+  const X = ctrl.X["44"];
+  assert(X, "controller installed X_44");
+  assert(licenseEOnState(X), "I_sku / controlEpisode wrote licenseE onto X");
+  assertEq(X.licenseE?.copiedIntoH, false, "licenseE not copied into H");
+  expectThrow(
+    () => assertOwnLicenseAndServingE(X),
+    "servingE is not an own field on X",
+    "before the turn, dump refuses missing servingE own field",
+  );
+  expectThrow(
+    () => viewOfServingStep(X, false, true),
+    "servingE is not an own field on X",
+    "view refuses to overlay servingE when it is not on X",
+  );
+
+  const overlay = servingEFromGreetingTurn({
+    content: "Hello! How can I help you today?",
+    traces: [{ ts: 1 }],
+  });
+  expectThrow(
+    () =>
+      assertServingEFromX(
+        { servingE: overlay, X_44: { E: overlay, servingE: overlay } },
+        X,
+      ),
+    "servingE is not an own field on X",
+    "dump refuses servingE built only in the view",
+  );
+
+  const noLicense = hybridState({
+    E: completedMiss39Obs(),
+    C: tau2Graph("one-shot", SERVING_MODEL),
+    S: catalogPointer(SERVING_MODEL),
+  });
+  expectThrow(
+    () => assertOwnLicenseAndServingE(noLicense),
+    "licenseE is not an own field on X",
+    "dump refuses when licenseE is not an own field on X",
+  );
 }
 
 async function testLandedServingStepDumpESplit(): Promise<void> {
@@ -2031,6 +2134,15 @@ async function testLandedServingStepDumpESplit(): Promise<void> {
   assertEq(dump.servingE.hung, false, "landed servingE is not hung");
   assertEq(dump.X_44.E.kind, "greeting-turn", "landed X_44.E is servingE, not hung license");
   assertEq(dump.X_44.E.hung, false, "landed X_44.E is not hung");
+  assert(
+    Boolean(dump.servingE.servedModel || dump.servingE.ts != null || dump.servingE.content),
+    "landed servingE has a turn-derived fact",
+  );
+  assert(dump.reading.includes(LICENSE_E_IS_HUNG_FIXTURE), "landed reading: licenseE is the hung fixture");
+  assert(dump.reading.includes(X_E_IS_SERVING_STEP_FROM_TURN), "landed reading: X.E is serving-step E from the turn");
+  assert(!dump.reading.includes(LEFTOVER_E_IS_LICENSE_PHRASE), "landed reading dropped leftover phrase");
+  assert(!dump.dumpIsNot.includes(LEFTOVER_E_IS_LICENSE_PHRASE), "landed dumpIsNot dropped leftover phrase");
+  assert(!dump.hung44LicenseObs.includes(LEFTOVER_E_IS_LICENSE_PHRASE), "landed hung44LicenseObs dropped leftover phrase");
   assertHonestServingStepE(dump);
 }
 
@@ -2078,6 +2190,7 @@ async function main(): Promise<void> {
     ["missing X[\"39\"] throws; does not invent S=0731", testMissingX39ThrowsNoAssemble],
     ["serving-step dump refuses empty H/M and stuffed pong/sourceEval", testServingStepDumpRefusesEmptyAndStuffedHM],
     ["serving-step dump refuses E smear / live hung-44 then served", testServingStepDumpRefusesESmear],
+    ["serving-step dump refuses overlay / missing own licenseE servingE", testServingStepDumpRefusesOverlayAndMissingOwnFields],
     ["serving-step X_n dump: same object, H/M from runTau2Turn", testHybridStateServingStepDumpAfterLicensedWrite],
     ["landed serving-step dump: licenseE ≠ servingE; live H/M kept", testLandedServingStepDumpESplit],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],

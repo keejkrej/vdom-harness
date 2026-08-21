@@ -12,7 +12,7 @@ import { executeGraphSelfTool, gymToolCalls, withGraphSelfTools, type GraphToolE
 import { serializeKernelC, stripGoldIds } from "./tau2-kernel.js";
 import { type HybridState, type Tau2Technique } from "./tau2-types.js";
 import { AIRLINE_POLICY_CHECKLIST } from "./tau2-policy.js";
-import { writeHybridH, writeHybridM } from "./tau2-hybrid-state.js";
+import { writeHybridH, writeHybridM, writeHybridServingE } from "./tau2-hybrid-state.js";
 
 const MAX_SELF_TOOL_ITERS = 4;
 
@@ -219,6 +219,9 @@ function finish(
   if (X) {
     writeHybridH(X, result.messages);
     writeHybridM(X, result.traces);
+    if (incoming.length === 0) {
+      writeHybridServingE(X, result, incoming);
+    }
   }
   return result;
 }
