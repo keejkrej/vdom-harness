@@ -97,9 +97,10 @@ npm run eval:tau2:hybrid-state-s-dump
 # or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-s-dump
 
 # Serving-step X_n dump (holes (1)+(2) after #18): licensed write, then ONE
-# runTau2Turn on that same X. licenseE is an own field (hung fixture). X.E /
-# servingE is attached from that turn (not a dump overlay). Not a score. No
-# after= on live airline improveLoop. No key → mock provider still runs a
+# runTau2Turn on that same X. licenseE is an own field (hung fixture). Dump
+# refuses if that own field is missing (does not invent licenseE from X.E).
+# X.E / servingE is attached from that turn (not a dump overlay). Not a score.
+# No after= on live airline improveLoop. No key → mock provider still runs a
 # real turn; live serving id is not faked.
 npm run eval:tau2:hybrid-state-serving-step-dump
 # or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-serving-step-dump

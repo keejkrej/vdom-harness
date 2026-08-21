@@ -1276,8 +1276,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Serving-step X_n dump after licensed I_sku write (holes (1)+(2) "
             "after #18). One runTau2Turn on the existing HybridState; H/M and "
-            "X.E from that turn. licenseE is an own field on X; servingE is "
-            "not a dump overlay. Not a score. Writes "
+            "X.E from that turn. licenseE is an own field on X; dump refuses "
+            "if it is missing (does not invent licenseE from X.E). servingE "
+            "is not a dump overlay. Not a score. Writes "
             "eval/tau2/hybrid-state-serving-step-dump.json."
         ),
     )
