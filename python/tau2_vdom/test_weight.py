@@ -14,6 +14,7 @@ from tau2_vdom.improve import (
     I_WEIGHT_NOTE,
     INCOMPLETE_FIXTURE_ID,
     LIVE_HANG_OBS_ISKU_FILE,
+    LIVE_HANG_OBS_ISKU_R6_FILE,
     SERVING_MODEL,
     _sidecar_catalog_jump,
     assert_live_hang_obs_isku_cell,
@@ -462,6 +463,35 @@ def test_reject_cell_12_stays_controller_replay() -> None:
         assert name not in blob
 
 
+def test_r6_later_timeout_does_not_overwrite_no_hang_packet() -> None:
+    first = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE).read_text())
+    assert first["hung"] is False
+    assert first["freshHang"] is False
+    assert first["holeOpen"] is True
+    assert first["obs"]["arm"] == "I_loop"
+    assert first["controllerReplay"] is False
+    r6 = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_R6_FILE).read_text())
+    assert_live_hang_obs_isku_cell(r6)
+    assert r6["controllerReplay"] is False
+    assert r6["freshHang"] is True
+    assert r6["hung"] is True
+    assert r6["obs"]["arm"] == "I_sku"
+    assert r6["applyScope"]["weighted"] == ["44"]
+    assert "44" not in (r6["applyScope"]["waitKept"] or [])
+    assert r6["omitAfter"] is True
+    assert r6["gate"]["after"] is None
+    assert r6["jumped"] is False
+    assert r6["servingPaused"] is False
+    assert r6["servingModelAfter"] == SERVING_MODEL
+    assert r6["pHit0813"] is None
+    assert r6["iSkuRequest"] == {"op": "i_sku", "before": 0}
+    assert "after" not in r6["iSkuRequest"]
+    blob = json.dumps(r6)
+    for name in FORBIDDEN_HANG_SOURCES:
+        assert name not in blob
+    assert "not a new timeout" not in r6["reading"]
+
+
 def test_weight_fixture_writes_report() -> None:
     path = run_weight_fixture_improve()
     latest = EVAL_DIR / "latest-improve.json"
@@ -501,6 +531,7 @@ def main() -> int:
         test_live_hang_obs_isku_no_hang_keeps_hole_open,
         test_live_hang_obs_isku_pending_key_and_landed,
         test_reject_cell_12_stays_controller_replay,
+        test_r6_later_timeout_does_not_overwrite_no_hang_packet,
         test_weight_fixture_writes_report,
     ]
     failed = 0

@@ -21,6 +21,7 @@ import { tau2Graph } from "./tau2-graph.js";
 import { type Tau2Obs } from "./tau2-types.js";
 
 export const LIVE_HANG_OBS_ISKU_FILE = "improve-live-0731-hang-obs-isku.json";
+export const LIVE_HANG_OBS_ISKU_R6_FILE = "improve-live-0731-hang-obs-isku-r6.json";
 
 export const FORBIDDEN_HANG_SOURCES = [
   "improve-live-0731-iweight-44-hung.json",
@@ -426,6 +427,13 @@ export function liveHangObsIskuEvalPath(repoRoot?: string): string {
     repoRoot ??
     join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   return join(root, "eval", "tau2", LIVE_HANG_OBS_ISKU_FILE);
+}
+
+export function liveHangObsIskuR6EvalPath(repoRoot?: string): string {
+  const root =
+    repoRoot ??
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  return join(root, "eval", "tau2", LIVE_HANG_OBS_ISKU_R6_FILE);
 }
 
 export function writeLiveHangObsIsku(report: LiveHangObsIskuReport, path?: string): string {

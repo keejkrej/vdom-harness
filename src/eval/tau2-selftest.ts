@@ -106,8 +106,10 @@ import {
   FORBIDDEN_HANG_SOURCES,
   GATE_OMIT_AFTER_REASON,
   LIVE_HANG_OBS_ISKU_FILE,
+  LIVE_HANG_OBS_ISKU_R6_FILE,
   LIVE_HANG_OBS_ISKU_READING,
   liveHangObsIskuEvalPath,
+  liveHangObsIskuR6EvalPath,
   pendingLiveHangObsIskuReport,
   readLiveHangObsIsku,
   runLiveHangObsIskuController,
@@ -2424,6 +2426,57 @@ async function testRejectCell12StaysControllerReplay(): Promise<void> {
   }
 }
 
+async function testR6LaterTimeoutDoesNotOverwriteNoHangPacket(): Promise<void> {
+  const first = readLiveHangObsIsku(liveHangObsIskuEvalPath());
+  assertEq(first.pendingKey, false, "1c3528c packet is measured");
+  assertEq(first.hung, false, "1c3528c hung=false stays");
+  assertEq(first.freshHang, false, "1c3528c freshHang=false stays");
+  assertEq(first.holeOpen, true, "1c3528c holeOpen=true stays");
+  assertEq(first.obs.arm, "I_loop", "1c3528c obs.arm stays I_loop");
+  assertEq(first.controllerReplay, false, "1c3528c is not a replay");
+
+  const r6 = readLiveHangObsIsku(liveHangObsIskuR6EvalPath());
+  assertEq(r6.kind, "live-closed-loop-obs", "r6 is the live Obs cell");
+  assertEq(r6.controllerReplay, false, "r6 is not a controller replay");
+  assertEq(r6.pendingKey, false, "r6 is measured");
+  assertEq(r6.freshHang, true, "r6 is a later live hang");
+  assertEq(r6.hung, true, "r6 hung=true");
+  assertEq(r6.holeOpen, false, "r6 I_sku ran on this hang");
+  assertEq(r6.obs.arm, "I_sku", "r6 obs.arm is I_sku");
+  assertEq(r6.obs.hung, true, "r6 obs.hung");
+  assertEq(r6.obs.taskId, "44", "r6 task 44");
+  assertEq(r6.obs.termination, "timeout", "r6 timeout");
+  assert(!r6.applyScope.waitKept.includes("44"), "r6 waitKept does not include 44");
+  assert(r6.applyScope.weighted.includes("44"), "r6 weighted includes 44");
+  assertEq(r6.omitAfter, true, "r6 omits after=");
+  assertEq(r6.iSkuRequest?.op, "i_sku", "r6 I_sku fired");
+  assert(!("after" in (r6.iSkuRequest ?? {})), "r6 I_sku request omits after=");
+  assertEq(r6.gate.action, "reject", "r6 gate reject");
+  assertEq(r6.gate.after, null, "r6 gate.after=null");
+  assertEq(r6.jumped, false, "r6 jumped=false");
+  assertEq(r6.servingPaused, false, "r6 servingPaused=false");
+  assertEq(r6.servingModelAfter, SERVING_MODEL, "r6 serving stays 0731");
+  assertEq(r6.pHit0813, null, "r6 does not invent p_hit(0813)");
+  assertEq(r6.trained, false, "r6 trainer off");
+  assert(r6.reading.includes("hung-first Obs chose I_sku"), "r6 reading is this hang");
+  assert(!r6.reading.includes("not a new timeout"), "r6 is not #12's phrase");
+  const blob = JSON.stringify(r6);
+  for (const name of FORBIDDEN_HANG_SOURCES) {
+    assert(!blob.includes(name), `r6 is not ${name} stuffed through Obs`);
+  }
+  assert(r6.sourceEval.includes(LIVE_HANG_OBS_ISKU_FILE) || r6.sourceEval.includes(LIVE_HANG_OBS_ISKU_R6_FILE), "r6 sourceEval is this run");
+  expectThrow(
+    () =>
+      assertLiveHangObsIskuCell({
+        ...r6,
+        sourceEval: [FORBIDDEN_HANG_SOURCES[0]!],
+        controllerReplay: true,
+      }),
+    "sourceEval-of-old-hung",
+    "r6 refuse #12 / old hung stuffed as this cell",
+  );
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -2476,6 +2529,7 @@ async function main(): Promise<void> {
     ["live hang-obs-isku no hang keeps hole open", testLiveHangObsIskuNoHangKeepsHoleOpen],
     ["live hang-obs-isku pending key + landed JSON", testLiveHangObsIskuPendingKeyAndLandedJson],
     ["#12 reject cell stays controllerReplay; this cell is not a relabel", testRejectCell12StaysControllerReplay],
+    ["r6 later timeout does not overwrite 1c3528c no-hang packet", testR6LaterTimeoutDoesNotOverwriteNoHangPacket],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {
