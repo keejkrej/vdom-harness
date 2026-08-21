@@ -345,12 +345,6 @@ export function assertHonestServingStepE(dump: ServingStepEHonesty): void {
   if (JSON.stringify(dump.licenseE) === JSON.stringify(dump.servingE)) {
     throw new Error("dump refused: licenseE === servingE; need two names for two facts");
   }
-  if (!dump.reading.includes(LICENSE_E_IS_HUNG_FIXTURE)) {
-    throw new Error(`dump refused: reading must say ${LICENSE_E_IS_HUNG_FIXTURE}`);
-  }
-  if (!dump.reading.includes(X_E_IS_SERVING_STEP_FROM_TURN)) {
-    throw new Error(`dump refused: reading must say ${X_E_IS_SERVING_STEP_FROM_TURN}`);
-  }
   for (const [name, field] of [
     ["reading", dump.reading],
     ["dumpIsNot", dump.dumpIsNot],
@@ -362,6 +356,18 @@ export function assertHonestServingStepE(dump: ServingStepEHonesty): void {
     if (readingHasLeftoverLicensePhrase(field)) {
       throw new Error(`dump refused: leftover phrase "${LEFTOVER_E_IS_LICENSE_PHRASE}" in ${name}`);
     }
+  }
+  if (!dump.reading.includes(LICENSE_E_IS_HUNG_FIXTURE)) {
+    throw new Error(`dump refused: reading must say ${LICENSE_E_IS_HUNG_FIXTURE}`);
+  }
+  if (!dump.reading.includes(X_E_IS_SERVING_STEP_FROM_TURN)) {
+    throw new Error(`dump refused: reading must say ${X_E_IS_SERVING_STEP_FROM_TURN}`);
+  }
+  for (const [name, field] of [
+    ["reading", dump.reading],
+    ["dumpIsNot", dump.dumpIsNot],
+    ["hung44LicenseObs", dump.hung44LicenseObs],
+  ] as const) {
     if (!field.includes(GREETING_NOT_LIVE_HUNG)) {
       throw new Error(`dump refused: ${name} must say ${GREETING_NOT_LIVE_HUNG}`);
     }
