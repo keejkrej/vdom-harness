@@ -114,6 +114,7 @@ import {
   thisEpisodeHungObs,
 } from "./tau2-live-hang-obs-isku.js";
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 let passed = 0;
 let failed = 0;
@@ -2387,6 +2388,31 @@ async function testLiveHangObsIskuPendingKeyAndLandedJson(): Promise<void> {
   }
 }
 
+async function testRejectCell12StaysControllerReplay(): Promise<void> {
+  const rejectPath = join(dirname(liveHangObsIskuEvalPath()), ISKU_REJECT_CELL_FILE);
+  const reject = JSON.parse(readFileSync(rejectPath, "utf8"));
+  assertEq(reject.controllerReplay, true, "#12 stays controllerReplay=true");
+  assertEq(reject.live, true, "#12 live means source traces were live, not a new timeout");
+  assert(Array.isArray(reject.sourceEval), "#12 still cites saved hung files");
+  for (const name of FORBIDDEN_HANG_SOURCES) {
+    assert(reject.sourceEval.includes(name), `#12 sourceEval still includes ${name}`);
+  }
+  assert(
+    String(reject.reading ?? "").includes("not a new timeout"),
+    "#12 reading still says not a new timeout",
+  );
+
+  const cell = readLiveHangObsIsku(liveHangObsIskuEvalPath());
+  assertEq(cell.controllerReplay, false, "this cell is not a replay");
+  assertEq(cell.kind, "live-closed-loop-obs", "this cell is live Obs, not a relabeled reject");
+  assert(cell.kind !== reject.kind, "this JSON is not #12 relabeled");
+  assertEq(cell.vsRejectCell, ISKU_REJECT_CELL_FILE, "cites #12 as the other cell");
+  const cellBlob = JSON.stringify(cell);
+  for (const name of FORBIDDEN_HANG_SOURCES) {
+    assert(!cellBlob.includes(name), `this cell is not ${name} stuffed through Obs`);
+  }
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -2438,6 +2464,7 @@ async function main(): Promise<void> {
     ["live hang-obs-isku THIS episode hung → I_sku omit after", testLiveHangObsIskuThisEpisodeHungThenIskuOmitAfter],
     ["live hang-obs-isku no hang keeps hole open", testLiveHangObsIskuNoHangKeepsHoleOpen],
     ["live hang-obs-isku pending key + landed JSON", testLiveHangObsIskuPendingKeyAndLandedJson],
+    ["#12 reject cell stays controllerReplay; this cell is not a relabel", testRejectCell12StaysControllerReplay],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

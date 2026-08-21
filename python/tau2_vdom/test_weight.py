@@ -439,6 +439,19 @@ def test_live_hang_obs_isku_pending_key_and_landed() -> None:
     assert "sku_w = _sidecar_catalog_jump(sidecar, before=before, after=" not in src
 
 
+def test_reject_cell_12_stays_controller_replay() -> None:
+    reject = json.loads((EVAL_DIR / "improve-live-0731-isku-44-reject.json").read_text())
+    assert reject["controllerReplay"] is True
+    assert reject["sourceEval"] == list(FORBIDDEN_HANG_SOURCES)
+    assert "not a new timeout" in reject["reading"]
+    landed = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE).read_text())
+    assert landed["controllerReplay"] is False
+    assert landed["kind"] != reject["kind"]
+    blob = json.dumps(landed)
+    for name in FORBIDDEN_HANG_SOURCES:
+        assert name not in blob
+
+
 def test_weight_fixture_writes_report() -> None:
     path = run_weight_fixture_improve()
     latest = EVAL_DIR / "latest-improve.json"
@@ -477,6 +490,7 @@ def main() -> int:
         test_live_hang_obs_isku_this_episode_hung_omit_after,
         test_live_hang_obs_isku_no_hang_keeps_hole_open,
         test_live_hang_obs_isku_pending_key_and_landed,
+        test_reject_cell_12_stays_controller_replay,
         test_weight_fixture_writes_report,
     ]
     failed = 0
