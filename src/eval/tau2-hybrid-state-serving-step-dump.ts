@@ -285,10 +285,22 @@ export function readingSmearsLiveHungThenServed(text: string): boolean {
   return lower.includes(LIVE_HUNG_THEN_SERVED_SMEAR);
 }
 
+export type EnvSplitView = {
+  kind?: string;
+  hung?: boolean | null;
+  termination?: string | null;
+  arm?: string;
+  taskId?: string;
+  copiedIntoH?: boolean;
+  notTau2UserGymStep?: boolean;
+  incomingMessages?: unknown[];
+  note?: string;
+};
+
 export type ServingStepEHonesty = {
   licenseE?: LicenseEView;
-  servingE?: (Partial<ServingEView> & { kind?: string; hung?: boolean | null; termination?: string | null }) | null;
-  X_44: { E?: { kind?: string; hung?: boolean | null; termination?: string | null } };
+  servingE?: EnvSplitView | null;
+  X_44: { E?: EnvSplitView };
   reading: string;
   dumpIsNot: string;
   hung44LicenseObs: string;
