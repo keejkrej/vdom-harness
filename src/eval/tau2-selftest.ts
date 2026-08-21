@@ -2283,6 +2283,7 @@ async function testLiveHangObsIskuThisEpisodeHungThenIskuOmitAfter(): Promise<vo
   const ran = runLiveHangObsIskuController(obs);
   assertEq(ran.iSkuFired, true, "I_sku request fires on THIS hung episode");
   assert(ran.applyScope.weighted.includes("44"), "applyScope.weighted includes 44");
+  assert(!ran.applyScope.waitKept.includes("44"), "waitKept does not include the hung task");
   assertEq(ran.gate.action, "reject", "omit after= rejects");
   assertEq(ran.gate.after, null, "gate.after is null");
   assertEq(ran.gate.reason, GATE_OMIT_AFTER_REASON, "0813 existing is not a gate");

@@ -341,6 +341,7 @@ def test_live_hang_obs_isku_this_episode_hung_omit_after() -> None:
     ctrl = control_batch([hung])
     assert ctrl["episodes"][0]["arm"] == "I_sku"
     assert ctrl["applyScope"]["weighted"] == ["44"]
+    assert "44" not in (ctrl["applyScope"]["waitKept"] or [])
     sku_w = _sidecar_catalog_jump(sidecar, before=0.0)
     assert sku_w["jumped"] is False
     assert sku_w["rejected"] is True
