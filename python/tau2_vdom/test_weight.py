@@ -9,21 +9,27 @@ from types import SimpleNamespace
 from tau2_vdom.improve import (
     CATALOG_JUMP_MODEL,
     EVAL_DIR,
+    FORBIDDEN_HANG_SOURCES,
     I_SKU_NOTE,
     I_WEIGHT_NOTE,
     INCOMPLETE_FIXTURE_ID,
+    LIVE_HANG_OBS_ISKU_FILE,
     SERVING_MODEL,
     _sidecar_catalog_jump,
+    assert_live_hang_obs_isku_cell,
+    build_live_hang_obs_isku_report,
     incomplete_fixture_traces,
     incomplete_reason,
     incomplete_train_traces,
     is_incomplete_episode,
+    pending_live_hang_obs_isku_report,
     run_isku_mount_cell,
     run_hybrid_state_s_dump,
     run_hybrid_state_serving_step_dump,
+    run_live_hang_obs_isku,
     run_weight_fixture_improve,
 )
-from tau2_vdom.runner import control_batch
+from tau2_vdom.runner import _has_live_key, control_batch
 from tau2_vdom.sidecar import default_sidecar
 
 
@@ -275,6 +281,163 @@ def test_isku_mount_cell_controller_no_live() -> None:
     assert "sku_w = _sidecar_catalog_jump(sidecar, before=before, after=" not in src
 
 
+def test_live_hang_obs_isku_refuses_old_hung_replay_after_phit() -> None:
+    hung = {
+        "taskId": "44",
+        "nSteps": 0,
+        "nSuccessProxy": 0,
+        "lastActions": [],
+        "channels": [],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_sku",
+        "hung": True,
+        "termination": "timeout",
+    }
+    for name in FORBIDDEN_HANG_SOURCES:
+        try:
+            build_live_hang_obs_isku_report(obs_list=[hung], source_eval=[name])
+        except ValueError as exc:
+            assert "sourceEval-of-old-hung" in str(exc)
+        else:
+            raise AssertionError(f"should refuse {name}")
+    try:
+        build_live_hang_obs_isku_report(obs_list=[hung], controller_replay=True)
+    except ValueError as exc:
+        assert "controllerReplay=true" in str(exc)
+    else:
+        raise AssertionError("should refuse controllerReplay")
+    try:
+        build_live_hang_obs_isku_report(obs_list=[hung], after=1.0)
+    except ValueError as exc:
+        assert "after=" in str(exc)
+    else:
+        raise AssertionError("should refuse after=")
+    try:
+        build_live_hang_obs_isku_report(obs_list=[hung], p_hit_0813=0.5)
+    except ValueError as exc:
+        assert "pHit0813" in str(exc)
+    else:
+        raise AssertionError("should refuse pHit0813")
+
+
+def test_live_hang_obs_isku_this_episode_hung_omit_after() -> None:
+    """THIS episode (HungSimulation), not old hung files. I_sku omits after=."""
+    sidecar = _reset_sidecar()
+    hung = {
+        "taskId": "44",
+        "nSteps": 0,
+        "nSuccessProxy": 0,
+        "lastActions": [],
+        "channels": [],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_sku",
+        "hung": True,
+        "termination": "timeout",
+    }
+    ctrl = control_batch([hung])
+    assert ctrl["episodes"][0]["arm"] == "I_sku"
+    assert ctrl["applyScope"]["weighted"] == ["44"]
+    sku_w = _sidecar_catalog_jump(sidecar, before=0.0)
+    assert sku_w["jumped"] is False
+    assert sku_w["rejected"] is True
+    assert sku_w["servingPaused"] is False
+    assert sku_w["servingModel"] == SERVING_MODEL
+    report = build_live_hang_obs_isku_report(
+        obs_list=[hung],
+        source_eval=[LIVE_HANG_OBS_ISKU_FILE],
+        sku_w=sku_w,
+    )
+    assert report["live"] is True
+    assert report["controllerReplay"] is False
+    assert report["freshHang"] is True
+    assert report["hung"] is True
+    assert report["obs"]["arm"] == "I_sku"
+    assert report["omitAfter"] is True
+    assert report["jumped"] is False
+    assert report["servingPaused"] is False
+    assert report["servingModelAfter"] == SERVING_MODEL
+    assert report["pHit0813"] is None
+    assert report["gate"]["after"] is None
+    assert report["gate"]["action"] == "reject"
+    assert report["iSkuRequest"] == {"op": "i_sku", "before": 0}
+    assert "after" not in report["iSkuRequest"]
+    assert report["trained"] is False
+    assert "live Obs of this episode" in report["reading"]
+    assert "not a controller replay of saved hung-44" in report["reading"]
+    assert "not a score" in report["reading"]
+    assert "not a dump" in report["reading"]
+    assert "not live hung-44 then served as a mount" in report["reading"]
+    assert "not a new timeout" not in report["reading"]
+    for name in FORBIDDEN_HANG_SOURCES:
+        assert name not in json.dumps(report)
+
+
+def test_live_hang_obs_isku_no_hang_keeps_hole_open() -> None:
+    miss = {
+        "taskId": "44",
+        "nSteps": 4,
+        "nSuccessProxy": 0,
+        "lastActions": ["update_reservation_flights"],
+        "channels": ["env"],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_loop",
+        "hung": False,
+        "termination": "user_stop",
+    }
+    report = build_live_hang_obs_isku_report(
+        obs_list=[miss],
+        source_eval=[LIVE_HANG_OBS_ISKU_FILE],
+    )
+    assert report["freshHang"] is False
+    assert report["hung"] is False
+    assert report["holeOpen"] is True
+    assert report["obs"]["arm"] == "I_loop"
+    assert report["iSkuRequest"] is None
+    assert report["controllerReplay"] is False
+    assert report["pHit0813"] is None
+    assert "hole remains open" in report["reading"]
+    assert "hung-first Obs chose I_sku" not in report["reading"]
+
+
+def test_live_hang_obs_isku_pending_key_and_landed() -> None:
+    pending = pending_live_hang_obs_isku_report()
+    assert pending["pendingKey"] is True
+    assert pending["freshHang"] is False
+    assert pending["hung"] is False
+    assert pending["holeOpen"] is True
+    assert pending["controllerReplay"] is False
+    assert pending["obs"]["arm"] is None
+    assert pending["pHit0813"] is None
+    assert "pending a key" in pending["reading"]
+    if not _has_live_key():
+        path = run_live_hang_obs_isku(write=True)
+        assert path.name == LIVE_HANG_OBS_ISKU_FILE
+    landed = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE).read_text())
+    assert_live_hang_obs_isku_cell(landed)
+    assert landed["controllerReplay"] is False
+    assert landed["pHit0813"] is None
+    assert landed["omitAfter"] is True
+    assert landed["servingPaused"] is False
+    assert landed["trained"] is False
+    if landed.get("pendingKey"):
+        assert landed["freshHang"] is False
+        assert landed["hung"] is False
+        assert landed["holeOpen"] is True
+    blob = json.dumps(landed)
+    for name in FORBIDDEN_HANG_SOURCES:
+        assert name not in blob
+    src = Path(__file__).with_name("improve.py").read_text()
+    assert "def run_live_hang_obs_isku" in src
+    assert 'sku_w = _sidecar_catalog_jump(sidecar, before=before)' in src
+    assert "sku_w = _sidecar_catalog_jump(sidecar, before=before, after=" not in src
+
+
 def test_weight_fixture_writes_report() -> None:
     path = run_weight_fixture_improve()
     latest = EVAL_DIR / "latest-improve.json"
@@ -309,6 +472,10 @@ def main() -> int:
         test_catalog_jump_mounts_0813,
         test_isku_writes_s_not_c,
         test_isku_mount_cell_controller_no_live,
+        test_live_hang_obs_isku_refuses_old_hung_replay_after_phit,
+        test_live_hang_obs_isku_this_episode_hung_omit_after,
+        test_live_hang_obs_isku_no_hang_keeps_hole_open,
+        test_live_hang_obs_isku_pending_key_and_landed,
         test_weight_fixture_writes_report,
     ]
     failed = 0

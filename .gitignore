@@ -15,4 +15,5 @@ eval/tau2/*.json
 !eval/tau2/improve-live-0731-isku-44-mount.json
 !eval/tau2/hybrid-state-s-dump.json
 !eval/tau2/hybrid-state-serving-step-dump.json
+!eval/tau2/improve-live-0731-hang-obs-isku.json
 !eval/tau2/README.md

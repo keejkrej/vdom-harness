@@ -91,6 +91,17 @@ I_SKU_NOTE = (
     "Catalog rebind, not fine-tuning. FakeTrainer and LoRA are not this arm."
 )
 I_CATALOG_NOTE = I_SKU_NOTE
+LIVE_HANG_OBS_ISKU_FILE = "improve-live-0731-hang-obs-isku.json"
+FORBIDDEN_HANG_SOURCES = (
+    "improve-live-0731-iweight-44-hung.json",
+    "improve-live-0731-self-3944-postgate.json",
+    "airline-live-self-3944-postgate-r0.json",
+)
+LIVE_HANG_OBS_ISKU_READING = (
+    "live Obs of this episode; not a controller replay of saved hung-44; "
+    "not a score; not a dump; not live hung-44 then served as a mount."
+)
+GATE_OMIT_AFTER_REASON = "no measured after-eval; 0813 existing is not a gate"
 I_WEIGHT_NOTE = (
     "I_weight TrainJob is a protocol stub, not the paper slow arm and not fine-tuning. "
     "The official incomplete arm is I_sku (catalog rebind to pro-0813). "
@@ -1282,6 +1293,17 @@ def build_parser() -> argparse.ArgumentParser:
             "eval/tau2/hybrid-state-serving-step-dump.json."
         ),
     )
+    p.add_argument(
+        "--live-hang-obs-isku",
+        action="store_true",
+        help=(
+            "Live closed-loop Obs cell: one official airline 0731 episode "
+            "(task 44), hung-first Obs on THOSE traces, I_sku omit after=. "
+            "Not #12 replay. Not a score. Not a dump. No key → pending JSON; "
+            "does not fake a hang. Writes "
+            "eval/tau2/improve-live-0731-hang-obs-isku.json."
+        ),
+    )
     return p
 
 
@@ -1404,8 +1426,366 @@ def run_hybrid_state_serving_step_dump(*, write: bool = True) -> Path:
     return out
 
 
+def assert_live_hang_obs_isku_cell(report: dict[str, Any]) -> None:
+    """Refuse #12 replay / old hung files / after= / invented p_hit(0813)."""
+    blob = json.dumps(report, default=str)
+    for name in FORBIDDEN_HANG_SOURCES:
+        if name in blob:
+            raise ValueError(
+                "live hang-obs-isku cell refused: sourceEval-of-old-hung "
+                f"({name}); this cell is live Obs of THIS episode, not saved "
+                "hung-44 / postgate"
+            )
+    if report.get("controllerReplay") is True:
+        raise ValueError(
+            "live hang-obs-isku cell refused: controllerReplay=true; "
+            "#12 is the replay; this cell is not"
+        )
+    if report.get("pHit0813") is not None:
+        raise ValueError(
+            "live hang-obs-isku cell refused: pHit0813 set; do not invent p_hit(0813)"
+        )
+    if report.get("after") is not None:
+        raise ValueError(
+            "live hang-obs-isku cell refused: after= present; this cell omits after="
+        )
+    gate = report.get("gate") or {}
+    if gate.get("after") is not None:
+        raise ValueError(
+            "live hang-obs-isku cell refused: gate.after present; omit after="
+        )
+    if report.get("omitAfter") is not True:
+        raise ValueError("live hang-obs-isku cell refused: omitAfter must be true")
+    req = report.get("iSkuRequest")
+    if isinstance(req, dict) and "after" in req and req.get("after") is not None:
+        raise ValueError("live hang-obs-isku cell refused: I_sku request has after=")
+    if report.get("iSkuRequestOmitsAfter") is not True:
+        raise ValueError(
+            "live hang-obs-isku cell refused: iSkuRequestOmitsAfter must be true"
+        )
+    reading = str(report.get("reading") or "")
+    for needle in (
+        "live Obs of this episode",
+        "not a controller replay of saved hung-44",
+        "not a score",
+        "not a dump",
+        "not live hung-44 then served as a mount",
+    ):
+        if needle not in reading:
+            raise ValueError(
+                f"live hang-obs-isku cell refused: reading missing “{needle}”"
+            )
+    if "not a new timeout" in reading:
+        raise ValueError(
+            "live hang-obs-isku cell refused: reading says “not a new timeout” "
+            "(#12 replay smear)"
+        )
+    if report.get("servingPaused") is not False:
+        raise ValueError("live hang-obs-isku cell refused: servingPaused must be false")
+    if report.get("trained") is True or report.get("trainerOff") is False:
+        raise ValueError("live hang-obs-isku cell refused: trainer must stay off")
+
+
+def _live_hang_reading(*, pending_key: bool, fresh_hang: bool, hung: bool) -> str:
+    if pending_key:
+        return (
+            "live Obs of this episode pending OPENROUTER_API_KEY; "
+            "not a controller replay of saved hung-44; not a score; not a dump; "
+            "not live hung-44 then served as a mount. Live JSON is pending a key. "
+            "No hang was faked."
+        )
+    if not fresh_hang or not hung:
+        return (
+            "live Obs of this episode; episode did not hang (freshHang=false); "
+            "hole remains open; not a controller replay of saved hung-44; "
+            "not a score; not a dump; not live hung-44 then served as a mount."
+        )
+    return (
+        "live Obs of this episode; hung-first Obs chose I_sku; omit after; "
+        "gate rejected; serving stayed 0731; not a controller replay of saved hung-44; "
+        "not a score; not a dump; not live hung-44 then served as a mount."
+    )
+
+
+def pending_live_hang_obs_isku_report(task_id: str = "44") -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "benchmark": "tau2-bench",
+        "kind": "live-closed-loop-obs",
+        "not_a_sota_result": True,
+        "closedLoop": False,
+        "domain": "airline",
+        "taskIds": [task_id],
+        "numTrials": 1,
+        "model": SERVING_MODEL,
+        "live": True,
+        "controllerReplay": False,
+        "freshHang": False,
+        "hung": False,
+        "holeOpen": True,
+        "pendingKey": True,
+        "obs": {
+            "arm": None,
+            "hung": False,
+            "taskId": None,
+            "termination": None,
+            "nSuccessProxy": None,
+        },
+        "applyScope": {"waitKept": [], "looped": [], "weighted": []},
+        "omitAfter": True,
+        "iSkuRequestOmitsAfter": True,
+        "iSkuRequest": None,
+        "jumped": False,
+        "servingPaused": False,
+        "servingModelAfter": SERVING_MODEL,
+        "proposedModel": CATALOG_JUMP_MODEL,
+        "pHit0813": None,
+        "notInventedPHit0813": True,
+        "trained": False,
+        "trainerOff": True,
+        "liveAirlineImproveLoopOmitsAfter": True,
+        "gate": {
+            "action": None,
+            "after": None,
+            "reason": "live episode pending OPENROUTER_API_KEY; I_sku not fired; after omitted",
+        },
+        "sourceEval": [LIVE_HANG_OBS_ISKU_FILE],
+        "sourceEvalIs": "this run",
+        "vsRejectCell": "improve-live-0731-isku-44-reject.json",
+        "reading": _live_hang_reading(pending_key=True, fresh_hang=False, hung=False),
+    }
+    assert_live_hang_obs_isku_cell(report)
+    return report
+
+
+def build_live_hang_obs_isku_report(
+    *,
+    obs_list: list[dict[str, Any]],
+    source_eval: list[str] | None = None,
+    sku_w: dict[str, Any] | None = None,
+    pending_key: bool = False,
+    controller_replay: bool = False,
+    p_hit_0813: float | None = None,
+    after: float | None = None,
+    eval_file: str | None = None,
+) -> dict[str, Any]:
+    """Build the cell from THIS episode's Obs. Refuses old hung files / after= / replay."""
+    if pending_key:
+        return pending_live_hang_obs_isku_report()
+    if controller_replay:
+        raise ValueError(
+            "live hang-obs-isku cell refused: controllerReplay=true; "
+            "#12 is the replay; this cell is not"
+        )
+    if p_hit_0813 is not None:
+        raise ValueError(
+            "live hang-obs-isku cell refused: pHit0813 set; do not invent p_hit(0813)"
+        )
+    if after is not None:
+        raise ValueError(
+            "live hang-obs-isku cell refused: after= present; this cell omits after="
+        )
+    used_source = list(source_eval) if source_eval else [eval_file or LIVE_HANG_OBS_ISKU_FILE]
+    blob = " ".join(used_source)
+    for name in FORBIDDEN_HANG_SOURCES:
+        if name in blob:
+            raise ValueError(
+                "live hang-obs-isku cell refused: sourceEval-of-old-hung "
+                f"({name}); this cell is live Obs of THIS episode, not saved "
+                "hung-44 / postgate"
+            )
+    ctrl = control_batch(obs_list)
+    first = obs_list[0] if obs_list else {}
+    task_id = str(first.get("taskId") or "44")
+    hung = any(bool(o.get("hung")) for o in obs_list)
+    arm = first.get("arm")
+    if hung:
+        arm = "I_sku"
+    apply_scope = ctrl.get("applyScope") or apply_scope_from_obs(obs_list)
+    i_sku_fired = "I_sku" in (ctrl.get("applied") or []) and hung
+    if i_sku_fired and task_id not in (apply_scope.get("weighted") or []):
+        raise ValueError(
+            "live hang-obs-isku cell refused: hung episode must choose I_sku "
+            "and weight that task"
+        )
+    if sku_w is not None:
+        gate_body = sku_w.get("gate") or {}
+        jumped = bool(sku_w.get("jumped"))
+        serving_after = sku_w.get("servingModel") or SERVING_MODEL
+        gate = {
+            "action": gate_body.get("action") or ("reject" if not jumped else "mount"),
+            "after": None,
+            "before": gate_body.get("before", 0),
+            "reason": gate_body.get("reason") or GATE_OMIT_AFTER_REASON,
+        }
+        if gate_body.get("after") is not None:
+            raise ValueError(
+                "live hang-obs-isku cell refused: after= present; this cell omits after="
+            )
+        if jumped or serving_after != SERVING_MODEL:
+            raise ValueError(
+                "live hang-obs-isku cell refused: omit-after must reject; serving stays 0731"
+            )
+        i_sku_req: dict[str, Any] | None = {"op": "i_sku", "before": 0}
+    else:
+        jumped = False
+        serving_after = SERVING_MODEL
+        gate = {
+            "action": "reject" if i_sku_fired else None,
+            "after": None,
+            "before": 0 if i_sku_fired else None,
+            "reason": (
+                GATE_OMIT_AFTER_REASON
+                if i_sku_fired
+                else "episode completed; I_sku not licensed; after omitted; hole remains open"
+            ),
+        }
+        i_sku_req = {"op": "i_sku", "before": 0} if i_sku_fired else None
+    report: dict[str, Any] = {
+        "benchmark": "tau2-bench",
+        "kind": "live-closed-loop-obs",
+        "not_a_sota_result": True,
+        "closedLoop": bool(i_sku_fired),
+        "domain": "airline",
+        "taskIds": [task_id],
+        "numTrials": 1,
+        "model": SERVING_MODEL,
+        "live": True,
+        "controllerReplay": False,
+        "freshHang": hung,
+        "hung": hung,
+        "holeOpen": not hung,
+        "pendingKey": False,
+        "obs": {
+            "arm": arm,
+            "hung": hung,
+            "taskId": task_id,
+            "termination": first.get("termination") or ("timeout" if hung else None),
+            "nSuccessProxy": 0 if hung else first.get("nSuccessProxy"),
+        },
+        "applyScope": {
+            "waitKept": list(apply_scope.get("waitKept") or []),
+            "looped": list(apply_scope.get("looped") or []),
+            "weighted": list(apply_scope.get("weighted") or []),
+        },
+        "omitAfter": True,
+        "iSkuRequestOmitsAfter": True,
+        "iSkuRequest": i_sku_req,
+        "jumped": False,
+        "servingPaused": False,
+        "servingModelAfter": SERVING_MODEL,
+        "proposedModel": CATALOG_JUMP_MODEL,
+        "pHit0813": None,
+        "notInventedPHit0813": True,
+        "trained": False,
+        "trainerOff": True,
+        "liveAirlineImproveLoopOmitsAfter": True,
+        "gate": {k: v for k, v in gate.items() if v is not None or k in {"action", "after"}},
+        "sourceEval": used_source,
+        "sourceEvalIs": "this run",
+        "vsRejectCell": "improve-live-0731-isku-44-reject.json",
+        "reading": _live_hang_reading(pending_key=False, fresh_hang=hung, hung=hung),
+    }
+    assert_live_hang_obs_isku_cell(report)
+    return report
+
+
+def write_live_hang_obs_isku(report: dict[str, Any], path: Path | None = None) -> Path:
+    assert_live_hang_obs_isku_cell(report)
+    EVAL_DIR.mkdir(parents=True, exist_ok=True)
+    out = path or (EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE)
+    out.write_text(json.dumps(report, indent=2) + "\n")
+    return out
+
+
+def _resolve_airline_hang_task() -> str:
+    from tau2.runner import get_tasks
+
+    tasks = get_tasks("airline")
+    ids = [str(getattr(t, "id", "")) for t in tasks]
+    if "44" in ids:
+        return "44"
+    if ids:
+        print(
+            f"[live-hang-obs-isku] official airline task 44 unavailable; using {ids[0]}",
+            flush=True,
+        )
+        return ids[0]
+    raise SystemExit("no official airline tasks")
+
+
+def run_live_hang_obs_isku(*, write: bool = True) -> Path:
+    """Dedicated live closed-loop Obs cell. Does not turn on after= in improveLoop.
+
+    No key → pending JSON (no hang faked, no copy of old hung files).
+    With key → one official airline 0731 trial; hung-first Obs on THOSE traces;
+    I_sku omits after= so the gate rejects and serving stays 0731.
+    """
+    if not _has_live_key():
+        report = pending_live_hang_obs_isku_report()
+        print(
+            "[live-hang-obs-isku] OPENROUTER_API_KEY missing; "
+            "live JSON is pending a key. No hang was faked.",
+            flush=True,
+        )
+        out = write_live_hang_obs_isku(report) if write else EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE
+        print(json.dumps({"wrote": str(out) if write else None, "report": report}, indent=2))
+        return out
+
+    _ensure_tau2_data_dir()
+    _apply_openrouter_defaults()
+    task_id = _resolve_airline_hang_task()
+    model = SERVING_MODEL
+    _pin_tau2_judges(model)
+    print(
+        f"[live-hang-obs-isku] live 0731 airline task={task_id} num-trials=1 "
+        f"model={model} (hung-first Obs on THIS episode)",
+        flush=True,
+    )
+    sims, _pass_hat, _avg, eval_path, _skipped = run_slice(
+        domain="airline",
+        task_ids=[task_id],
+        technique="one-shot",
+        model=model,
+        live=True,
+        num_trials=1,
+        user="user_simulator",
+        max_steps=80,
+        trial_timeout_s=480,
+    )
+    obs = _collect_obs(sims)
+    hung = any(bool(o.get("hung")) for o in obs)
+    sku_w: dict[str, Any] | None = None
+    if hung:
+        from tau2_vdom.sidecar import default_sidecar
+
+        sidecar = default_sidecar()
+        sidecar.request({"op": "set_technique", "technique": "one-shot"})
+        ctrl = control_batch(obs)
+        if "I_sku" not in (ctrl.get("applied") or []):
+            raise SystemExit(
+                "live hang-obs-isku: episode hung but hung-first controller did not apply I_sku"
+            )
+        current = _p_hit(_pass_hat)
+        before = 0.0 if current is None else current
+        # Same honesty lock as live airline improveLoop: omit after=.
+        sku_w = _sidecar_catalog_jump(sidecar, before=before)
+    rel = str(eval_path.relative_to(REPO_ROOT)) if eval_path.is_file() else LIVE_HANG_OBS_ISKU_FILE
+    report = build_live_hang_obs_isku_report(
+        obs_list=obs,
+        source_eval=[LIVE_HANG_OBS_ISKU_FILE, rel],
+        sku_w=sku_w,
+        eval_file=LIVE_HANG_OBS_ISKU_FILE,
+    )
+    out = write_live_hang_obs_isku(report) if write else EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE
+    print(json.dumps({"wrote": str(out) if write else None, "report": report}, indent=2))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.live_hang_obs_isku:
+        run_live_hang_obs_isku()
+        return 0
     if args.hybrid_state_serving_step_dump:
         run_hybrid_state_serving_step_dump()
         return 0
