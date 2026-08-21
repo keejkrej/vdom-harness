@@ -1275,8 +1275,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Serving-step X_n dump after licensed I_sku write (hole (1) after "
-            "#16). One runTau2Turn on the existing HybridState; H/M from that "
-            "turn. Not a score. Writes eval/tau2/hybrid-state-serving-step-dump.json."
+            "#17). One runTau2Turn on the existing HybridState; H/M from that "
+            "turn. licenseE is the hung/timeout LICENSE; servingE is the "
+            "greeting turn. Not a score. Writes "
+            "eval/tau2/hybrid-state-serving-step-dump.json."
         ),
     )
     return p

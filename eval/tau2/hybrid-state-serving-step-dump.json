@@ -33,7 +33,7 @@
   "jumpedIs": "S write on X_n, then one serving-step turn on that same X",
   "mounted": true,
   "sourceOfTruth": "X_n the turn mutated",
-  "dumpIsNot": "ping / get_state S0 / controller-only empty H",
+  "dumpIsNot": "ping / get_state S0 / controller-only empty H; E is license, not serving-step E; greeting turn, not live hung-44 then served",
   "notAssembledFromServingByTask": true,
   "sameObjectAsTurnX": true,
   "servingByTaskIs": "derived cache from X.S, not the lookup",
@@ -52,13 +52,53 @@
     "assistantChars": 32,
     "assistantPreview": "Hello! How can I help you today?"
   },
+  "eSplit": "licenseE ≠ servingE",
+  "licenseE": {
+    "kind": "license",
+    "taskId": "44",
+    "hung": true,
+    "arm": "I_sku",
+    "termination": "timeout",
+    "copiedIntoH": false
+  },
+  "servingE": {
+    "kind": "greeting-turn",
+    "hung": false,
+    "termination": null,
+    "notTau2UserGymStep": true,
+    "incomingMessages": [],
+    "note": "greeting-turn; not a τ² user/gym step; incoming messages []"
+  },
   "X_44": {
     "H": [
       {"role": "system", "content": "You are a customer service agent that helps the user according to the policy below.\nIn each turn you can either:\n- Send a message to the user.\n- Make a tool call.\nYou cannot do both at the same time.\nAlways follow the policy. Prefer tools over guessing.\nYou have get_agent_graph and set_agent_graph. You may read and rewrite your own graph when the current C is failing the user or the policy. You should get_agent_graph before set_agent_graph. Domain tools go to the environment; get/set are local and never forwarded to the gym. Do not invent reservation IDs.\n\nYou are this AgentGraph (id=tau2-oneshot); this is your current kernel C.\nYou have get_agent_graph and set_agent_graph. You may read and rewrite your own graph when the current C is failing the user or the policy. You should get_agent_graph before set_agent_graph.\n<kernel>\nsolve role=solve — Help the user according to the domain policy. Use tools when needed. Each turn is either a tool call or a message to the user, never both.\n</kernel>\n\n<policy>\n\n</policy>"},
       {"role": "assistant", "content": "Hello! How can I help you today?"}
     ],
     "M": [{"nodeKey": "solve", "role": "solve", "input": "", "output": "Hello! How can I help you today?", "ts": 1787297809272}],
-    "E": {"taskId": "44", "hung": true, "arm": "I_sku", "termination": "timeout"},
+    "E": {
+      "kind": "greeting-turn",
+      "hung": false,
+      "termination": null,
+      "notTau2UserGymStep": true,
+      "incomingMessages": [],
+      "note": "greeting-turn; not a τ² user/gym step; incoming messages []"
+    },
+    "licenseE": {
+      "kind": "license",
+      "taskId": "44",
+      "hung": true,
+      "arm": "I_sku",
+      "termination": "timeout",
+      "copiedIntoH": false
+    },
+    "servingE": {
+      "kind": "greeting-turn",
+      "hung": false,
+      "termination": null,
+      "notTau2UserGymStep": true,
+      "incomingMessages": [],
+      "note": "greeting-turn; not a τ² user/gym step; incoming messages []"
+    },
     "C": {"nModel": "deepseek/deepseek-v4-flash-0731", "nodeKeys": ["solve"], "graphHash": "37ba3d4356cdb3f2667acd135ccb40df8675514bd9662409007f3c9180292cee"},
     "S": {"sku": "deepseek/deepseek-v4-pro-0813", "servingPaused": false},
     "S_on_state": true,
@@ -87,7 +127,7 @@
   },
   "fresh39": {"S": {"sku": "deepseek/deepseek-v4-flash-0731", "servingPaused": false}, "inherited0813": false},
   "sourceEval": ["improve-live-0731-iweight-44-hung.json", "improve-live-0731-self-3944-postgate.json", "airline-live-self-3944-postgate-r0.json"],
-  "hung44LicenseObs": "reconstructed hung=true/timeout fixture citing sourceEval; not a new 0731 timeout; not copied into H",
+  "hung44LicenseObs": "reconstructed hung=true/timeout fixture citing sourceEval; E is license, not serving-step E; greeting turn, not live hung-44 then served; not a new 0731 timeout; not copied into H",
   "trainerIWeight": "unimplemented; off the claim",
-  "reading": "Serving-step X_n dump after licensed write: same HybridState the turn mutated; H/M from that runTau2Turn, not assembled; not a score"
+  "reading": "Serving-step X_n dump after licensed write: same HybridState the turn mutated; H/M from that runTau2Turn, not assembled; licenseE ≠ servingE; E is license, not serving-step E; greeting turn, not live hung-44 then served; not a score"
 }
