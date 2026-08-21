@@ -57,7 +57,7 @@ Official post-gate 39/44 log (replay falsifier, not a live 0813 vs 0731 table): 
 
 Honest I_sku reject cell (controller replay of saved live hung-44 traces; omit after; `nTurns=9` is one hung trial, not nine hangs; not a new timeout; not a result): `improve-live-0731-isku-44-reject.json`.
 
-Live closed-loop Obs cell (not #12). One official airline 0731 episode (task 44); hung-first Obs on **those** traces; I_sku omits `after=` so the gate rejects and serving stays 0731. `controllerReplay=false`. `sourceEval` is this run. Not a score, not a dump, not a mount. No key → pending JSON (no hang faked): `improve-live-0731-hang-obs-isku.json`.
+Live closed-loop Obs cell (not #12). One official airline 0731 episode (task 44); hung-first Obs on **those** traces. Measured keyed run: episode completed (`obs.arm=I_loop`, `user_stop`); `freshHang=false`; **hole still open**. I_sku not licensed. `controllerReplay=false`. Not a score, not a hang, not a dump: `improve-live-0731-hang-obs-isku.json`.
 
 Honest I_sku mount protocol cell (same hung-44 license as the #12 reject; I_sku WITH fixture after; then one live 0813 serve). Not a τ² lift, not invented `p_hit(0813)`, not a Pro-vs-Flash score: `improve-live-0731-isku-44-mount.json`.
 

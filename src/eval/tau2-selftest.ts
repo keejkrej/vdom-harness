@@ -2379,8 +2379,19 @@ async function testLiveHangObsIskuPendingKeyAndLandedJson(): Promise<void> {
     assertEq(landed.servingModelAfter, SERVING_MODEL, "landed hang serving stays 0731");
     assertEq(landed.gate.after, null, "landed hang gate.after=null");
   } else {
-    assertEq(landed.holeOpen, true, "landed no-hang keeps the hole open");
+    assertEq(landed.pendingKey, false, "landed measured episode is not pending a key");
+    assertEq(landed.freshHang, false, "landed did not hang");
     assertEq(landed.hung, false, "landed no-hang is not a stuffed hang");
+    assertEq(landed.holeOpen, true, "landed no-hang keeps the hole open");
+    assertEq(landed.obs.arm, "I_loop", "landed obs.arm is I_loop");
+    assertEq(landed.obs.hung, false, "landed obs.hung is false");
+    assertEq(landed.obs.taskId, "44", "landed obs.taskId is 44");
+    assertEq(landed.obs.termination, "user_stop", "landed termination is user_stop");
+    assertEq(landed.obs.nSuccessProxy, 0, "landed nSuccessProxy is 0");
+    assertEq(landed.gate.action, null, "I_sku not licensed");
+    assertEq(landed.iSkuRequest, null, "I_sku request did not fire");
+    assert(landed.reading.includes("hole remains open"), "reading keeps the hole open");
+    assert(!landed.reading.includes("hung-first Obs chose I_sku"), "does not claim a hang");
   }
   const blob = JSON.stringify(landed);
   for (const name of FORBIDDEN_HANG_SOURCES) {

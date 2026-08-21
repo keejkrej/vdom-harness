@@ -12,17 +12,17 @@
   "freshHang": false,
   "hung": false,
   "holeOpen": true,
-  "pendingKey": true,
+  "pendingKey": false,
   "obs": {
-    "arm": null,
+    "arm": "I_loop",
     "hung": false,
-    "taskId": null,
-    "termination": null,
-    "nSuccessProxy": null
+    "taskId": "44",
+    "termination": "user_stop",
+    "nSuccessProxy": 0
   },
   "applyScope": {
     "waitKept": [],
-    "looped": [],
+    "looped": ["44"],
     "weighted": []
   },
   "omitAfter": true,
@@ -40,10 +40,13 @@
   "gate": {
     "action": null,
     "after": null,
-    "reason": "live episode pending OPENROUTER_API_KEY; I_sku not fired; after omitted"
+    "reason": "episode completed; I_sku not licensed; after omitted; hole remains open"
   },
-  "sourceEval": ["improve-live-0731-hang-obs-isku.json"],
+  "sourceEval": [
+    "improve-live-0731-hang-obs-isku.json",
+    "eval/tau2/airline-live-one-shot-r1787303038-20260821T090358Z.json"
+  ],
   "sourceEvalIs": "this run",
   "vsRejectCell": "improve-live-0731-isku-44-reject.json",
-  "reading": "live Obs of this episode pending OPENROUTER_API_KEY; not a controller replay of saved hung-44; not a score; not a dump; not live hung-44 then served as a mount. Live JSON is pending a key. No hang was faked."
+  "reading": "live Obs of this episode; episode did not hang (freshHang=false); hole remains open; not a controller replay of saved hung-44; not a score; not a dump; not live hung-44 then served as a mount."
 }

@@ -1523,6 +1523,7 @@ def pending_live_hang_obs_isku_report(task_id: str = "44") -> dict[str, Any]:
         "hung": False,
         "holeOpen": True,
         "pendingKey": True,
+        "arm": None,
         "obs": {
             "arm": None,
             "hung": False,
@@ -1655,6 +1656,7 @@ def build_live_hang_obs_isku_report(
         "hung": hung,
         "holeOpen": not hung,
         "pendingKey": False,
+        "arm": "I_sku" if i_sku_fired else None,
         "obs": {
             "arm": arm,
             "hung": hung,

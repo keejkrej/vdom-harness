@@ -26,10 +26,9 @@ from tau2_vdom.improve import (
     run_isku_mount_cell,
     run_hybrid_state_s_dump,
     run_hybrid_state_serving_step_dump,
-    run_live_hang_obs_isku,
     run_weight_fixture_improve,
 )
-from tau2_vdom.runner import _has_live_key, control_batch
+from tau2_vdom.runner import control_batch
 from tau2_vdom.sidecar import default_sidecar
 
 
@@ -416,9 +415,6 @@ def test_live_hang_obs_isku_pending_key_and_landed() -> None:
     assert pending["obs"]["arm"] is None
     assert pending["pHit0813"] is None
     assert "pending a key" in pending["reading"]
-    if not _has_live_key():
-        path = run_live_hang_obs_isku(write=True)
-        assert path.name == LIVE_HANG_OBS_ISKU_FILE
     landed = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE).read_text())
     assert_live_hang_obs_isku_cell(landed)
     assert landed["controllerReplay"] is False
@@ -430,6 +426,20 @@ def test_live_hang_obs_isku_pending_key_and_landed() -> None:
         assert landed["freshHang"] is False
         assert landed["hung"] is False
         assert landed["holeOpen"] is True
+    else:
+        assert landed["pendingKey"] is False
+        assert landed["freshHang"] is False
+        assert landed["hung"] is False
+        assert landed["holeOpen"] is True
+        assert landed["obs"]["arm"] == "I_loop"
+        assert landed["obs"]["hung"] is False
+        assert landed["obs"]["taskId"] == "44"
+        assert landed["obs"]["termination"] == "user_stop"
+        assert landed["obs"]["nSuccessProxy"] == 0
+        assert landed["iSkuRequest"] is None
+        assert landed["gate"]["action"] is None
+        assert "hole remains open" in landed["reading"]
+        assert "hung-first Obs chose I_sku" not in landed["reading"]
     blob = json.dumps(landed)
     for name in FORBIDDEN_HANG_SOURCES:
         assert name not in blob

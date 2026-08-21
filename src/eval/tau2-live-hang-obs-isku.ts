@@ -59,6 +59,8 @@ export type LiveHangObsIskuReport = {
   hung: boolean;
   holeOpen: boolean;
   pendingKey: boolean;
+  /** Slice / I_sku arm when present. Null / omitted when I_sku is not licensed. */
+  arm?: LiveHangObsArm;
   obs: {
     arm: LiveHangObsArm;
     hung: boolean;
@@ -211,6 +213,7 @@ export function pendingLiveHangObsIskuReport(taskId = "44"): LiveHangObsIskuRepo
     hung: false,
     holeOpen: true,
     pendingKey: true,
+    arm: null,
     obs: {
       arm: null,
       hung: false,
@@ -331,6 +334,7 @@ export function buildLiveHangObsIskuReport(opts: {
     hung,
     holeOpen,
     pendingKey: false,
+    arm: iSkuFired ? "I_sku" : null,
     obs: {
       arm,
       hung,
