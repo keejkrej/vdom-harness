@@ -22,6 +22,7 @@ import { type Tau2Obs } from "./tau2-types.js";
 
 export const LIVE_HANG_OBS_ISKU_FILE = "improve-live-0731-hang-obs-isku.json";
 export const LIVE_HANG_OBS_ISKU_R6_FILE = "improve-live-0731-hang-obs-isku-r6.json";
+export const LIVE_HANG_OBS_ISKU_TASK_DEFAULT = "44";
 
 export const FORBIDDEN_HANG_SOURCES = [
   "improve-live-0731-iweight-44-hung.json",
@@ -198,7 +199,7 @@ function readingFor(opts: { pendingKey: boolean; freshHang: boolean; hung: boole
   );
 }
 
-export function pendingLiveHangObsIskuReport(taskId = "44"): LiveHangObsIskuReport {
+export function pendingLiveHangObsIskuReport(taskId = LIVE_HANG_OBS_ISKU_TASK_DEFAULT): LiveHangObsIskuReport {
   const report: LiveHangObsIskuReport = {
     benchmark: "tau2-bench",
     kind: "live-closed-loop-obs",
@@ -240,7 +241,7 @@ export function pendingLiveHangObsIskuReport(taskId = "44"): LiveHangObsIskuRepo
       after: null,
       reason: "live episode pending OPENROUTER_API_KEY; I_sku not fired; after omitted",
     },
-    sourceEval: [LIVE_HANG_OBS_ISKU_FILE],
+    sourceEval: [liveHangObsIskuFilename(taskId)],
     sourceEvalIs: "this run",
     vsRejectCell: "improve-live-0731-isku-44-reject.json",
     reading: readingFor({ pendingKey: true, freshHang: false, hung: false }),
@@ -264,7 +265,7 @@ export function buildLiveHangObsIskuReport(opts: {
   pHit0813?: null | number;
   after?: number;
 }): LiveHangObsIskuReport {
-  if (opts.pendingKey) return pendingLiveHangObsIskuReport(opts.episode.taskId);
+  if (opts.pendingKey) return pendingLiveHangObsIskuReport(opts.episode.taskId ?? LIVE_HANG_OBS_ISKU_TASK_DEFAULT);
   if (opts.controllerReplay) {
     throw new Error(
       "live hang-obs-isku cell refused: controllerReplay=true; #12 is the replay; this cell is not",
@@ -276,7 +277,8 @@ export function buildLiveHangObsIskuReport(opts: {
   if (opts.after !== undefined) {
     throw new Error("live hang-obs-isku cell refused: after= present; this cell omits after=");
   }
-  const sourceEval = opts.sourceEval ?? [opts.episode.evalFile ?? LIVE_HANG_OBS_ISKU_FILE];
+  const sourceEval =
+    opts.sourceEval ?? [opts.episode.evalFile ?? liveHangObsIskuFilename(opts.episode.taskId)];
   const forbidden = hasForbiddenHangSource(sourceEval);
   if (forbidden) {
     throw new Error(
@@ -411,7 +413,7 @@ export function runLiveHangObsIskuController(obs: Tau2Obs): {
 }
 
 /** Obs of THIS hung episode. Not hung44LicenseObs / sourceEval replay. */
-export function thisEpisodeHungObs(taskId = "44"): Tau2Obs {
+export function thisEpisodeHungObs(taskId = LIVE_HANG_OBS_ISKU_TASK_DEFAULT): Tau2Obs {
   return observeTau2({
     traces: [],
     taskId,
@@ -422,11 +424,18 @@ export function thisEpisodeHungObs(taskId = "44"): Tau2Obs {
   });
 }
 
-export function liveHangObsIskuEvalPath(repoRoot?: string): string {
+export function liveHangObsIskuFilename(taskId = LIVE_HANG_OBS_ISKU_TASK_DEFAULT): string {
+  const tid = String(taskId);
+  return tid === LIVE_HANG_OBS_ISKU_TASK_DEFAULT
+    ? LIVE_HANG_OBS_ISKU_FILE
+    : `improve-live-0731-hang-obs-isku-${tid}.json`;
+}
+
+export function liveHangObsIskuEvalPath(repoRoot?: string, taskId = LIVE_HANG_OBS_ISKU_TASK_DEFAULT): string {
   const root =
     repoRoot ??
     join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  return join(root, "eval", "tau2", LIVE_HANG_OBS_ISKU_FILE);
+  return join(root, "eval", "tau2", liveHangObsIskuFilename(taskId));
 }
 
 export function liveHangObsIskuR6EvalPath(repoRoot?: string): string {
@@ -438,7 +447,24 @@ export function liveHangObsIskuR6EvalPath(repoRoot?: string): string {
 
 export function writeLiveHangObsIsku(report: LiveHangObsIskuReport, path?: string): string {
   assertLiveHangObsIskuCell(report);
-  const out = path ?? liveHangObsIskuEvalPath();
+  const taskId = report.taskIds[0] ?? LIVE_HANG_OBS_ISKU_TASK_DEFAULT;
+  const out = path ?? liveHangObsIskuEvalPath(undefined, taskId);
+  const base = out.split(/[\\/]/).pop() ?? "";
+  if (
+    (base === LIVE_HANG_OBS_ISKU_FILE || base === LIVE_HANG_OBS_ISKU_R6_FILE) &&
+    taskId !== LIVE_HANG_OBS_ISKU_TASK_DEFAULT
+  ) {
+    throw new Error(
+      "live hang-obs-isku refused to overwrite the 44 / r6 packets; " +
+        `TASK_ID=${taskId} writes ${liveHangObsIskuFilename(taskId)}`,
+    );
+  }
+  if (base === LIVE_HANG_OBS_ISKU_R6_FILE) {
+    throw new Error(
+      "live hang-obs-isku refused to overwrite r6; " +
+        "task 44 still writes the historical improve-live-0731-hang-obs-isku.json",
+    );
+  }
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
   return out;
@@ -451,24 +477,54 @@ export function readLiveHangObsIsku(path?: string): LiveHangObsIskuReport {
   return report;
 }
 
-function parseArgs(argv: string[]): { pendingKey: boolean; write: boolean } {
+export function parseLiveHangObsIskuArgs(argv: string[]): {
+  pendingKey: boolean;
+  write: boolean;
+  taskId: string;
+  out?: string;
+} {
   const pendingKey = argv.includes("--pending-key") || !process.env.OPENROUTER_API_KEY;
   const write = !argv.includes("--no-write");
-  return { pendingKey, write };
+  let taskId = LIVE_HANG_OBS_ISKU_TASK_DEFAULT;
+  let out: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--task-id" || arg === "--live-hang-obs-isku") {
+      const next = argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        taskId = next;
+        i += 1;
+      }
+      continue;
+    }
+    if (arg === "--out" || arg === "--live-hang-obs-isku-out") {
+      const next = argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        out = next;
+        i += 1;
+      }
+      continue;
+    }
+    if (arg === "--pending-key" || arg === "--no-write") continue;
+    if (!arg.startsWith("-")) {
+      taskId = arg;
+    }
+  }
+  return { pendingKey, write, taskId, out };
 }
 
 function main(): void {
-  const { pendingKey, write } = parseArgs(process.argv.slice(2));
+  const { pendingKey, write, taskId, out } = parseLiveHangObsIskuArgs(process.argv.slice(2));
   const report = pendingKey
-    ? pendingLiveHangObsIskuReport()
+    ? pendingLiveHangObsIskuReport(taskId)
     : (() => {
         throw new Error(
           "live hang-obs-isku TS CLI does not run the airline episode; " +
-            "use PYTHONPATH=python python3 -m tau2_vdom.improve --live-hang-obs-isku",
+            "use PYTHONPATH=python python3 -m tau2_vdom.improve --live-hang-obs-isku [TASK_ID]",
         );
       })();
   if (write) {
-    const path = writeLiveHangObsIsku(report);
+    const path = writeLiveHangObsIsku(report, out);
     process.stdout.write(`${JSON.stringify({ wrote: path, report }, null, 2)}\n`);
     return;
   }

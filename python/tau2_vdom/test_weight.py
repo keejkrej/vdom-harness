@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,19 +16,25 @@ from tau2_vdom.improve import (
     INCOMPLETE_FIXTURE_ID,
     LIVE_HANG_OBS_ISKU_FILE,
     LIVE_HANG_OBS_ISKU_R6_FILE,
+    LIVE_HANG_OBS_ISKU_TASK_DEFAULT,
     SERVING_MODEL,
     _sidecar_catalog_jump,
     assert_live_hang_obs_isku_cell,
     build_live_hang_obs_isku_report,
+    build_parser,
     incomplete_fixture_traces,
     incomplete_reason,
     incomplete_train_traces,
     is_incomplete_episode,
+    live_hang_obs_isku_filename,
+    live_hang_obs_isku_path,
     pending_live_hang_obs_isku_report,
     run_isku_mount_cell,
     run_hybrid_state_s_dump,
     run_hybrid_state_serving_step_dump,
+    run_live_hang_obs_isku,
     run_weight_fixture_improve,
+    write_live_hang_obs_isku,
 )
 from tau2_vdom.runner import control_batch
 from tau2_vdom.sidecar import default_sidecar
@@ -492,6 +499,93 @@ def test_r6_later_timeout_does_not_overwrite_no_hang_packet() -> None:
     assert "not a new timeout" not in r6["reading"]
 
 
+def test_live_hang_obs_isku_task_id_writes_new_file() -> None:
+    """TASK_ID 39 writes a new file; 44 keeps the historical name; packets stay put."""
+    help_text = build_parser().format_help()
+    assert "--live-hang-obs-isku [TASK_ID]" in help_text or "TASK_ID" in help_text
+    assert "improve-live-0731-hang-obs-isku-<TASK_ID>.json" in help_text
+    ns_default = build_parser().parse_args(["--live-hang-obs-isku"])
+    assert ns_default.live_hang_obs_isku == LIVE_HANG_OBS_ISKU_TASK_DEFAULT
+    ns_39 = build_parser().parse_args(
+        ["--live-hang-obs-isku", "39", "--live-hang-obs-isku-out", "tmp-39.json"]
+    )
+    assert ns_39.live_hang_obs_isku == "39"
+    assert ns_39.live_hang_obs_isku_out == "tmp-39.json"
+    assert live_hang_obs_isku_filename("44") == LIVE_HANG_OBS_ISKU_FILE
+    assert live_hang_obs_isku_filename("39") == "improve-live-0731-hang-obs-isku-39.json"
+    assert live_hang_obs_isku_path("44") == EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE
+    assert live_hang_obs_isku_path("39") == EVAL_DIR / "improve-live-0731-hang-obs-isku-39.json"
+
+    first = EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE
+    r6 = EVAL_DIR / LIVE_HANG_OBS_ISKU_R6_FILE
+    first_before = first.read_bytes()
+    r6_before = r6.read_bytes()
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "improve-live-0731-hang-obs-isku-39.json"
+        out = run_live_hang_obs_isku(write=True, task_id="39", out_path=dest)
+        assert out.name == "improve-live-0731-hang-obs-isku-39.json"
+        assert out.is_file()
+        report = json.loads(out.read_text())
+        assert report["taskIds"] == ["39"]
+        assert report["sourceEval"] == ["improve-live-0731-hang-obs-isku-39.json"]
+        assert report["pendingKey"] is True
+        assert report["hung"] is False
+        assert report["controllerReplay"] is False
+        assert report["pHit0813"] is None
+        assert report["omitAfter"] is True
+        assert first.read_bytes() == first_before
+        assert r6.read_bytes() == r6_before
+        try:
+            write_live_hang_obs_isku(report, first)
+        except ValueError as exc:
+            assert "overwrite" in str(exc)
+        else:
+            raise AssertionError("task 39 must not write the historical 44 packet")
+    assert first.read_bytes() == first_before
+    assert r6.read_bytes() == r6_before
+    assert not (EVAL_DIR / "improve-live-0731-hang-obs-isku-39.json").exists()
+
+
+def test_live_hang_obs_isku_builders_are_task_generic() -> None:
+    sidecar = _reset_sidecar()
+    hung = {
+        "taskId": "39",
+        "nSteps": 0,
+        "nSuccessProxy": 0,
+        "lastActions": [],
+        "channels": [],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_sku",
+        "hung": True,
+        "termination": "timeout",
+    }
+    ctrl = control_batch([hung])
+    assert ctrl["episodes"][0]["arm"] == "I_sku"
+    assert ctrl["applyScope"]["weighted"] == ["39"]
+    assert "39" not in (ctrl["applyScope"]["waitKept"] or [])
+    sku_w = _sidecar_catalog_jump(sidecar, before=0.0)
+    report = build_live_hang_obs_isku_report(obs_list=[hung], sku_w=sku_w)
+    assert report["taskIds"] == ["39"]
+    assert report["obs"]["taskId"] == "39"
+    assert report["obs"]["arm"] == "I_sku"
+    assert report["freshHang"] is True
+    assert report["hung"] is True
+    assert report["controllerReplay"] is False
+    assert report["omitAfter"] is True
+    assert report["gate"]["after"] is None
+    assert report["gate"]["action"] == "reject"
+    assert report["jumped"] is False
+    assert report["servingPaused"] is False
+    assert report["servingModelAfter"] == SERVING_MODEL
+    assert report["pHit0813"] is None
+    assert report["sourceEval"] == ["improve-live-0731-hang-obs-isku-39.json"]
+    pending = pending_live_hang_obs_isku_report("39")
+    assert pending["taskIds"] == ["39"]
+    assert pending["sourceEval"] == ["improve-live-0731-hang-obs-isku-39.json"]
+
+
 def test_weight_fixture_writes_report() -> None:
     path = run_weight_fixture_improve()
     latest = EVAL_DIR / "latest-improve.json"
@@ -532,6 +626,8 @@ def main() -> int:
         test_live_hang_obs_isku_pending_key_and_landed,
         test_reject_cell_12_stays_controller_replay,
         test_r6_later_timeout_does_not_overwrite_no_hang_packet,
+        test_live_hang_obs_isku_task_id_writes_new_file,
+        test_live_hang_obs_isku_builders_are_task_generic,
         test_weight_fixture_writes_report,
     ]
     failed = 0
