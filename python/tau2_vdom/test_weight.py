@@ -18,6 +18,7 @@ from tau2_vdom.improve import (
     incomplete_train_traces,
     is_incomplete_episode,
     run_isku_mount_cell,
+    run_hybrid_state_s_dump,
     run_weight_fixture_improve,
 )
 from tau2_vdom.runner import control_batch
@@ -248,7 +249,18 @@ def test_isku_mount_cell_controller_no_live() -> None:
     assert turn44.get("servingModel") == CATALOG_JUMP_MODEL
     assert turn39.get("servingModel") == SERVING_MODEL
     assert turn44.get("servingPaused") is False
+    assert turn44.get("X", {}).get("44", {}).get("S", {}).get("sku") == CATALOG_JUMP_MODEL
+    assert turn39.get("X", {}).get("39", {}).get("S", {}).get("sku") == SERVING_MODEL
+    dump = sidecar.request({"op": "dump_hybrid"})
+    assert dump.get("X", {}).get("44", {}).get("S", {}).get("sku") == CATALOG_JUMP_MODEL
+    assert dump.get("X", {}).get("39", {}).get("S", {}).get("sku") == SERVING_MODEL
+    assert dump.get("servingByTaskIs") == "derived cache from X.S, not the lookup"
+    assert dump.get("dumpIsNot") == "ping / get_state S0"
+    ping = sidecar.request({"op": "ping"})
+    assert ping.get("servingModel") == SERVING_MODEL
+    assert ping.get("serving", {}).get("sku") == SERVING_MODEL
     assert callable(run_isku_mount_cell)
+    assert callable(run_hybrid_state_s_dump)
 
 
 def test_weight_fixture_writes_report() -> None:

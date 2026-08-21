@@ -94,7 +94,7 @@ export type Tau2Obs = {
  * I_loop never writes S. I_sku mount writes only S, and only onto the
  * weighted episodes of that batch.
  * Per-episode controller coordinate, not a process-global servingSku.
- * Still not a live HybridState.S dump of a τ² episode / paper X_n.S.
+ * Source of truth is HybridState.S on the X_n object itself.
  */
 export type CatalogPointer = {
   sku: string;
@@ -102,6 +102,25 @@ export type CatalogPointer = {
 };
 
 export type ServingSku = CatalogPointer;
+
+/**
+ * Specified runtime state X=(H,M,E,C,S).
+ * S lives ON this object. Not ControlledEpisode.serving alone, not a
+ * process Map (`servingByTask`) as the lookup, and not a post-hoc
+ * assembly that reads that Map then stuffs S into a new object.
+ */
+export type HybridHistory = Message[];
+export type HybridMemory = Trace[];
+export type HybridEnv = Tau2Obs;
+export type HybridController = AgentGraph;
+
+export type HybridState = {
+  H: HybridHistory;
+  M: HybridMemory;
+  E: HybridEnv;
+  C: HybridController;
+  S: CatalogPointer;
+};
 
 /**
  * Mixed-batch split:

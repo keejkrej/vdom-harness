@@ -90,6 +90,11 @@ PYTHONPATH=python python3 -m tau2_vdom.improve --weight --weight-fixture
 # Not a τ² score. Needs OPENROUTER_API_KEY for the live serve; without it the
 # controller still mounts S for 44 and writes a reject-with-reason JSON.
 PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell
+
+# X_n.S dump after licensed I_sku write (controller; no new 0813 ping).
+# Not a score. Writes eval/tau2/hybrid-state-s-dump.json.
+npm run eval:tau2:hybrid-state-s-dump
+# or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-s-dump
 ```
 
 `eval/tau2/latest-improve.json` records the **sequence** of rounds: `pHit` / `passHatK` / `taskPHit`, Obs, intervention, and graph diff per round. Scores are not invented. If a live slice is already 1.0 under the naive graph, the report stops after the first Obs (`stopReason: saturated`).

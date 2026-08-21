@@ -1260,6 +1260,16 @@ def build_parser() -> argparse.ArgumentParser:
             "eval/tau2/improve-live-0731-isku-44-mount.json."
         ),
     )
+    p.add_argument(
+        "--hybrid-state-s-dump",
+        action="store_true",
+        help=(
+            "X_n.S dump after licensed I_sku write. Reuses the #15 mount-cell "
+            "controller (hung-44 + fixture after). Does not re-run a live 0813 "
+            "ping. jumped is the S write. Not a score. Writes "
+            "eval/tau2/hybrid-state-s-dump.json."
+        ),
+    )
     return p
 
 
@@ -1338,8 +1348,33 @@ def run_isku_mount_cell(*, live_serve: bool = True, write: bool = True) -> Path:
     return out
 
 
+def run_hybrid_state_s_dump(*, write: bool = True) -> Path:
+    """X_n.S dump after licensed write. No live 0813 ping. No airline improveLoop."""
+    import shutil
+    import subprocess
+
+    npx = shutil.which("npx")
+    if npx is None:
+        raise SystemExit("npx not found; install Node.js >= 18")
+    script = REPO_ROOT / "src" / "eval" / "tau2-hybrid-state-s-dump.ts"
+    cmd = [npx, "--yes", "tsx", str(script)]
+    if not write:
+        cmd.append("--no-write")
+    print("[hybrid-state-s-dump] " + " ".join(cmd), flush=True)
+    completed = subprocess.run(cmd, cwd=str(REPO_ROOT), check=False)
+    out = EVAL_DIR / "hybrid-state-s-dump.json"
+    if completed.returncode != 0:
+        raise SystemExit(completed.returncode)
+    if write and not out.is_file():
+        raise SystemExit(f"hybrid-state dump did not write {out}")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.hybrid_state_s_dump:
+        run_hybrid_state_s_dump()
+        return 0
     if args.isku_mount_cell:
         run_isku_mount_cell()
         return 0

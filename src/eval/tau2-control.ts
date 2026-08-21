@@ -13,7 +13,7 @@ import {
   type InterventionArm,
   type InterventionLicense,
 } from "./tau2-improve.js";
-import { type ApplyScope, type CatalogPointer, type Tau2Obs } from "./tau2-types.js";
+import { type ApplyScope, type CatalogPointer, type HybridState, type Tau2Obs } from "./tau2-types.js";
 import {
   applyISku,
   CATALOG_JUMP_MODEL,
@@ -23,34 +23,43 @@ import {
   type CatalogJumpDecision,
   type CatalogJumpProposal,
 } from "./tau2-weight.js";
+import { defaultHybridC, hybridState, writeHybridS } from "./tau2-hybrid-state.js";
 
 /**
  * Landed controller.
  * Hung/incomplete licenses I_sku — not “pick a pricier model.”
  * Mixed batches apply BOTH buckets: slice=I_sku does not drop I_loop.
- * S is a per-episode CatalogPointer beside C, not n.model, not a rebound
- * sibling graph, and not a process-global servingSku. Gate is a measured
- * after-eval, not “0813 exists.” Still not a live HybridState.S dump.
+ * S is HybridState.S on the X_n object (also projected as episode.serving).
+ * Not n.model, not a rebound sibling graph, and not a process-global servingSku.
+ * Gate is a measured after-eval, not “0813 exists.”
  */
 export const CONTROLLER_NOTE =
   "License is hung/incomplete, not pick a pricier model. " +
   "Mixed 39/44 applies BOTH buckets (39 I_loop C1, 44 I_sku); consuming only slice drops I_loop. " +
-  "I_sku writes S (per-episode catalog pointer beside C) to deepseek/deepseek-v4-pro-0813 after a measured after-eval; " +
+  "I_sku writes X.S (HybridState.S on the episode) to deepseek/deepseek-v4-pro-0813 after a measured after-eval; " +
   "0813 existing is not a gate. Jump iff later serving model id is 0813. " +
   "I_loop never writes any episode's S. A new batch starts at S0 and does not inherit process servingSku. " +
-  "servingPaused stays false. Catalog rebind, not fine-tuning. No LoRA.";
+  "servingPaused stays false. Catalog rebind, not fine-tuning. No LoRA. " +
+  "servingByTask is a derived cache from X.S, not the lookup.";
 
 export type ControlledEpisode = {
   taskId?: string;
   hung: boolean;
   arm: InterventionArm;
   license: InterventionLicense;
-  /** Per-episode S. I_loop never writes this. I_sku mount writes only weighted episodes. */
-  serving: CatalogPointer;
+  /** Paper X_n. I_sku mount writes X.S on this object. */
+  X: HybridState;
+  /** Derived view of X.S. Source of truth is X.S. */
+  readonly serving: CatalogPointer;
 };
 
 export type ControlledBatch = {
   episodes: ControlledEpisode[];
+  /**
+   * Live HybridState objects keyed by task. Same references as episodes[i].X.
+   * I_sku writes X.S on these objects. Not assembled from servingByTask.
+   */
+  X: Record<string, HybridState>;
   /** Slice prefers I_sku if any hung. Not the only consumer. */
   slice: InterventionArm;
   /** Per-task arms. A runner that only reads slice drops I_loop on mixed 39/44. */
@@ -69,7 +78,7 @@ export type ControlledBatch = {
   serving: CatalogPointer;
   /**
    * I_sku cell result for this batch (0813 if that gate mounted).
-   * Not the per-task source of truth — read episode.serving / servingModelForTask.
+   * Not the per-task source of truth — read X_n.S / servingModelForTask.
    */
   servingSku: CatalogPointer;
   servingPaused: false;
@@ -79,14 +88,23 @@ export type ControlledBatch = {
 
 export function controlEpisode(
   obs: Tau2Obs,
-  opts?: { loopExhausted?: boolean },
+  opts?: { loopExhausted?: boolean; graph?: AgentGraph; serving?: CatalogPointer },
 ): ControlledEpisode {
+  const s0 = opts?.serving ?? catalogPointer(SERVING_MODEL);
+  const X = hybridState({
+    E: obs,
+    C: opts?.graph ?? defaultHybridC(s0.sku),
+    S: catalogPointer(s0.sku),
+  });
   return {
     taskId: obs.taskId,
     hung: Boolean(obs.hung),
     arm: recommendIntervention(obs, opts),
     license: interventionLicense(obs, opts),
-    serving: catalogPointer(SERVING_MODEL),
+    X,
+    get serving() {
+      return this.X.S;
+    },
   };
 }
 
@@ -126,16 +144,20 @@ export function controlBatch(
   },
 ): ControlledBatch {
   const s0 = opts?.serving ?? catalogPointer(SERVING_MODEL);
-  const episodes = obsList.map((o) => ({
-    ...controlEpisode(o, opts),
-    serving: catalogPointer(s0.sku),
-  }));
+  const episodes = obsList.map((o) =>
+    controlEpisode(o, { ...opts, serving: catalogPointer(s0.sku), graph: opts?.graph }),
+  );
+  const X: Record<string, HybridState> = {};
+  for (const e of episodes) {
+    if (e.taskId) X[e.taskId] = e.X;
+  }
   const slice = recommendSliceIntervention(obsList, opts);
   const applyScope = computeApplyScope(obsList);
   const buckets = bucketsFromEpisodes(episodes);
   const applied = appliedFromScope(applyScope);
   const out: ControlledBatch = {
     episodes,
+    X,
     slice,
     buckets,
     applied,
@@ -152,6 +174,11 @@ export function controlBatch(
     out.loop = applyILoop(opts.graph, obsList);
     out.graphC1 = out.loop.applied ? out.loop.graphAfter : opts.graph;
     // I_loop mutates C only. No episode's S is written.
+    for (const e of episodes) {
+      if (e.taskId && applyScope.looped.includes(e.taskId) && out.graphC1) {
+        e.X.C = out.graphC1;
+      }
+    }
   }
 
   if (applyScope.weighted.length > 0 || slice === "I_sku") {
@@ -175,7 +202,7 @@ export function controlBatch(
   return out;
 }
 
-/** I_sku mount writes only the weighted episodes' S. I_loop never calls this. */
+/** I_sku mount writes only the weighted episodes' X.S. I_loop never calls this. */
 export function writeISkuServing(
   episodes: ControlledEpisode[],
   weighted: string[],
@@ -183,7 +210,7 @@ export function writeISkuServing(
 ): void {
   for (const e of episodes) {
     if (e.taskId && weighted.includes(e.taskId)) {
-      e.serving = catalogPointer(serving.sku);
+      writeHybridS(e.X, serving);
     }
   }
 }
@@ -197,12 +224,12 @@ export function controllerServingLog(ctrl: ControlledBatch): {
   const parts: string[] = [];
   for (const e of ctrl.episodes) {
     if (!e.taskId) continue;
-    tasks[e.taskId] = e.serving;
-    const tag = e.serving.sku.includes("0813")
+    tasks[e.taskId] = e.X.S;
+    const tag = e.X.S.sku.includes("0813")
       ? "0813"
-      : e.serving.sku.includes("0731")
+      : e.X.S.sku.includes("0731")
         ? "0731"
-        : e.serving.sku;
+        : e.X.S.sku;
     parts.push(`${e.taskId}.sku=${tag}`);
   }
   return { text: parts.join(" "), tasks };
@@ -221,8 +248,8 @@ export function servingGraphForTask(ctrl: ControlledBatch, taskId: string): Agen
 }
 
 export function servingModelForTask(ctrl: ControlledBatch, taskId: string): string | undefined {
-  const ep = ctrl.episodes.find((e) => e.taskId === taskId);
-  if (ep) return ep.serving.sku;
+  const X = ctrl.X[taskId] ?? ctrl.episodes.find((e) => e.taskId === taskId)?.X;
+  if (X) return X.S.sku;
   return ctrl.serving.sku;
 }
 
