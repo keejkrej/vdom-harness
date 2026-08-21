@@ -61,7 +61,7 @@ Honest I_sku mount protocol cell (same hung-44 license as the #12 reject; I_sku 
 
 X_n.S dump after that licensed write (critic hole (1) after #15). S is on the HybridState object. Not a score, not a new 0813 serve, not assembled from `servingByTask`: `hybrid-state-s-dump.json`.
 
-Serving-step X_n dump after #16 (remaining hole (1)): same HybridState the licensed write mutated, then ONE `runTau2Turn` appends that turn's messages to `X.H` and traces to `X.M`. Not a score, not a Pro-vs-Flash table, not stuffed H/M: `hybrid-state-serving-step-dump.json`.
+Serving-step X_n dump after #17 (honesty hole (1)): same HybridState the licensed write mutated, then ONE `runTau2Turn` appends that turn's messages to `X.H` and traces to `X.M`. `licenseE` is the reconstructed hung/timeout LICENSE; `servingE` is the greeting turn (not hung/timeout; not a τ² user/gym step). Not "live hung-44 then served." Not a score, not a Pro-vs-Flash table, not stuffed H/M: `hybrid-state-serving-step-dump.json`.
 
 ```
 npm test
