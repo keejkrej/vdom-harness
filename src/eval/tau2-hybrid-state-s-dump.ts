@@ -28,15 +28,14 @@ import {
 import {
   CATALOG_JUMP_MODEL,
   SERVING_MODEL,
-  catalogPointer,
   sameCTopology,
 } from "./tau2-weight.js";
 import {
   compactC,
   cGraphHash,
-  hybridState,
   nModelOf,
   nodeListOf,
+  requireHybridX,
   sOnState,
   type HybridState,
 } from "./tau2-hybrid-state.js";
@@ -133,15 +132,7 @@ function viewOf(X: HybridState): HybridStateDumpView {
 export function runFresh39AfterMount(graphC0: ControlledBatch["graphC0"]): HybridState {
   const start = graphC0 ?? tau2Graph("one-shot", SERVING_MODEL);
   const fresh = controlBatch([completedMiss39Obs()], { graph: start });
-  const X = fresh.X["39"] ?? fresh.episodes[0]?.X;
-  if (!X) {
-    return hybridState({
-      E: completedMiss39Obs(),
-      C: start,
-      S: catalogPointer(SERVING_MODEL),
-    });
-  }
-  return X;
+  return requireHybridX(fresh.X, "39");
 }
 
 export function buildHybridStateSDump(opts?: {

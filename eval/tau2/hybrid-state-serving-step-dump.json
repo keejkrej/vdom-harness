@@ -1,0 +1,167 @@
+{
+  "benchmark": "tau2-bench",
+  "kind": "hybrid-state-serving-step-dump",
+  "not_a_sota_result": true,
+  "closedLoop": false,
+  "maxRounds": 0,
+  "domain": "airline",
+  "taskIds": [
+    "39",
+    "44"
+  ],
+  "arm44": "I_sku",
+  "license": "hung",
+  "slice": "I_sku",
+  "applyScope": {
+    "waitKept": [],
+    "looped": [
+      "39"
+    ],
+    "weighted": [
+      "44"
+    ]
+  },
+  "servingPaused": false,
+  "trained": false,
+  "notFineTuning": true,
+  "notInventedPHit0813": true,
+  "pHit0813": null,
+  "protocolCell": true,
+  "fixtureAfter": true,
+  "incompleteFixture": true,
+  "notTau2Lift": true,
+  "omitAfter": false,
+  "liveAirlineImproveLoopOmitsAfter": true,
+  "liveServe": false,
+  "liveServingId": null,
+  "servingIdNotFaked": true,
+  "liveTurnRejected": true,
+  "liveTurnRejectReason": "no OPENROUTER_API_KEY; live serving id not faked; mock turn wrote H/M onto existing X",
+  "mockProviderTurn": true,
+  "vsRejectCell": "improve-live-0731-isku-44-reject.json",
+  "vsMountCell": "improve-live-0731-isku-44-mount.json",
+  "jumped": true,
+  "jumpedIs": "S write on X_n, then one serving-step turn on that same X",
+  "mounted": true,
+  "sourceOfTruth": "X_n the turn mutated",
+  "dumpIsNot": "ping / get_state S0 / controller-only empty H",
+  "notAssembledFromServingByTask": true,
+  "sameObjectAsTurnX": true,
+  "servingByTaskIs": "derived cache from X.S, not the lookup",
+  "servingStep": {
+    "op": "runTau2Turn",
+    "notPing": true,
+    "notGetState": true,
+    "hFromTurn": true,
+    "mFromTurn": true,
+    "sameObjectAsTurnX": true,
+    "model": "deepseek/deepseek-v4-pro-0813",
+    "hLength": 2,
+    "mLength": 1,
+    "hRoles": [
+      "system",
+      "assistant"
+    ],
+    "firstTrace": {
+      "nodeKey": "solve",
+      "role": "solve",
+      "ts": 1787297674946
+    },
+    "assistantChars": 61,
+    "assistantPreview": "serving-step-turn:deepseek/deepseek-v4-pro-0813:1787297674945"
+  },
+  "X_44": {
+    "H": [
+      {
+        "role": "system",
+        "content": "You are a customer service agent that helps the user according to the policy below.\nIn each turn you can either:\n- Send a message to the user.\n- Make a tool call.\nYou cannot do both at the same time.\nAlways follow the policy. Prefer tools over guessing.\nYou have get_agent_graph and set_agent_graph. You may read and rewrite your own graph when the current C is failing the user or the policy. You should get_agent_graph before set_agent_graph. Domain tools go to the environment; get/set are local and never forwarded to the gym. Do not invent reservation IDs.\n\nYou are this AgentGraph (id=tau2-oneshot); this is your current kernel C.\nYou have get_agent_graph and set_agent_graph. You may read and rewrite your own graph when the current C is failing the user or the policy. You should get_agent_graph before set_agent_graph.\n<kernel>\nsolve role=solve — Help the user according to the domain policy. Use tools when needed. Each turn is either a tool call or a message to the user, never both.\n</kernel>\n\n<policy>\n\n</policy>"
+      },
+      {
+        "role": "assistant",
+        "content": "serving-step-turn:deepseek/deepseek-v4-pro-0813:1787297674945"
+      }
+    ],
+    "M": [
+      {
+        "nodeKey": "solve",
+        "role": "solve",
+        "input": "",
+        "output": "serving-step-turn:deepseek/deepseek-v4-pro-0813:1787297674945",
+        "ts": 1787297674946
+      }
+    ],
+    "E": {
+      "taskId": "44",
+      "hung": true,
+      "arm": "I_sku",
+      "termination": "timeout"
+    },
+    "C": {
+      "nModel": "deepseek/deepseek-v4-flash-0731",
+      "nodeKeys": [
+        "solve"
+      ],
+      "graphHash": "37ba3d4356cdb3f2667acd135ccb40df8675514bd9662409007f3c9180292cee"
+    },
+    "S": {
+      "sku": "deepseek/deepseek-v4-pro-0813",
+      "servingPaused": false
+    },
+    "S_on_state": true,
+    "hLength": 2,
+    "mLength": 1
+  },
+  "X_39": {
+    "H": [],
+    "M": [],
+    "E": {
+      "taskId": "39",
+      "hung": false,
+      "arm": "I_loop"
+    },
+    "C": {
+      "nModel": "deepseek/deepseek-v4-flash-0731",
+      "nodeKeys": [
+        "solve",
+        "policy-checklist"
+      ],
+      "graphHash": "5ac1d1455e6fce79dbdd01d8a149ed6f80c30dad724b868e293d9e72f5096d0c"
+    },
+    "S": {
+      "sku": "deepseek/deepseek-v4-flash-0731",
+      "servingPaused": false
+    },
+    "S_on_state": true,
+    "hLength": 0,
+    "mLength": 0
+  },
+  "C": {
+    "nModel": "deepseek/deepseek-v4-flash-0731",
+    "nModelUnchanged": true,
+    "topologyUnchanged": true,
+    "graphHashBefore": "37ba3d4356cdb3f2667acd135ccb40df8675514bd9662409007f3c9180292cee",
+    "graphHashAfter": "37ba3d4356cdb3f2667acd135ccb40df8675514bd9662409007f3c9180292cee",
+    "nodeListBefore": [
+      "solve"
+    ],
+    "nodeListAfter": [
+      "solve"
+    ],
+    "sameNodeList": true
+  },
+  "fresh39": {
+    "S": {
+      "sku": "deepseek/deepseek-v4-flash-0731",
+      "servingPaused": false
+    },
+    "inherited0813": false
+  },
+  "sourceEval": [
+    "improve-live-0731-iweight-44-hung.json",
+    "improve-live-0731-self-3944-postgate.json",
+    "airline-live-self-3944-postgate-r0.json"
+  ],
+  "hung44LicenseObs": "reconstructed hung=true/timeout fixture citing sourceEval; not a new 0731 timeout; not copied into H",
+  "trainerIWeight": "unimplemented; off the claim",
+  "reading": "Serving-step X_n dump after licensed write: same HybridState the turn mutated; H/M from that runTau2Turn, not assembled; not a score"
+}

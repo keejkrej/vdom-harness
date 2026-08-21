@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from tau2_vdom.improve import (
@@ -19,6 +20,7 @@ from tau2_vdom.improve import (
     is_incomplete_episode,
     run_isku_mount_cell,
     run_hybrid_state_s_dump,
+    run_hybrid_state_serving_step_dump,
     run_weight_fixture_improve,
 )
 from tau2_vdom.runner import control_batch
@@ -251,6 +253,11 @@ def test_isku_mount_cell_controller_no_live() -> None:
     assert turn44.get("servingPaused") is False
     assert turn44.get("X", {}).get("44", {}).get("S", {}).get("sku") == CATALOG_JUMP_MODEL
     assert turn39.get("X", {}).get("39", {}).get("S", {}).get("sku") == SERVING_MODEL
+    x44 = turn44.get("X", {}).get("44") or {}
+    assert x44.get("H"), "sidecar turn writes H onto existing X"
+    assert x44.get("M"), "sidecar turn writes M onto existing X"
+    assert any(m.get("content") == "hello" for m in x44.get("H", []) if m.get("role") == "user")
+    assert any(m.get("role") == "assistant" for m in x44.get("H", []))
     dump = sidecar.request({"op": "dump_hybrid"})
     assert dump.get("X", {}).get("44", {}).get("S", {}).get("sku") == CATALOG_JUMP_MODEL
     assert dump.get("X", {}).get("39", {}).get("S", {}).get("sku") == SERVING_MODEL
@@ -261,6 +268,11 @@ def test_isku_mount_cell_controller_no_live() -> None:
     assert ping.get("serving", {}).get("sku") == SERVING_MODEL
     assert callable(run_isku_mount_cell)
     assert callable(run_hybrid_state_s_dump)
+    assert callable(run_hybrid_state_serving_step_dump)
+    src = Path(__file__).with_name("improve.py").read_text()
+    assert "Fixture after only at the controller; omit here so live airline" in src
+    assert "sku_w = _sidecar_catalog_jump(sidecar, before=before)" in src
+    assert "sku_w = _sidecar_catalog_jump(sidecar, before=before, after=" not in src
 
 
 def test_weight_fixture_writes_report() -> None:
