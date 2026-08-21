@@ -96,11 +96,11 @@ PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell
 npm run eval:tau2:hybrid-state-s-dump
 # or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-s-dump
 
-# Serving-step X_n dump (hole (1) after #17): licensed write, then ONE runTau2Turn
-# on that same X (H/M from the turn). licenseE is the hung/timeout LICENSE;
-# servingE is the greeting turn (not hung). Not a score. No after= on live
-# airline improveLoop. No key → mock provider still runs a real turn; live
-# serving id is not faked.
+# Serving-step X_n dump (holes (1)+(2) after #18): licensed write, then ONE
+# runTau2Turn on that same X. licenseE is an own field (hung fixture). X.E /
+# servingE is attached from that turn (not a dump overlay). Not a score. No
+# after= on live airline improveLoop. No key → mock provider still runs a
+# real turn; live serving id is not faked.
 npm run eval:tau2:hybrid-state-serving-step-dump
 # or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-serving-step-dump
 ```

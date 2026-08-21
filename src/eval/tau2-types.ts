@@ -114,12 +114,51 @@ export type HybridMemory = Trace[];
 export type HybridEnv = Tau2Obs;
 export type HybridController = AgentGraph;
 
+/**
+ * Reconstructed hung/timeout I_sku LICENSE. Own field on X, not copied into H.
+ * Not serving-step E.
+ */
+export type LicenseE = {
+  kind: "license";
+  taskId: "44";
+  hung: true;
+  arm: "I_sku";
+  termination: "timeout";
+  copiedIntoH: false;
+};
+
+export const SERVING_E_NOTE =
+  "greeting-turn; not a τ² user/gym step; incoming messages []" as const;
+
+/**
+ * Serving-step E attached from a completed runTau2Turn.
+ * Not a constant overlay. Must carry a turn-derived fact (servedModel, ts, or content).
+ */
+export type ServingE = {
+  kind: "greeting-turn";
+  hung: false;
+  termination: null;
+  notTau2UserGymStep: true;
+  incomingMessages: [];
+  note: typeof SERVING_E_NOTE;
+  servedModel?: string;
+  ts?: number;
+  content?: string;
+};
+
+/**
+ * Specified runtime state X=(H,M,E,C,S).
+ * S lives ON this object. licenseE is the hung fixture (own field).
+ * After a greeting turn, E / servingE is serving-step E from that turn.
+ */
 export type HybridState = {
   H: HybridHistory;
   M: HybridMemory;
-  E: HybridEnv;
+  E: HybridEnv | ServingE;
   C: HybridController;
   S: CatalogPointer;
+  licenseE?: LicenseE;
+  servingE?: ServingE;
 };
 
 /**

@@ -1,17 +1,18 @@
 /**
- * Serving-step X_n dump after a licensed I_sku write (critic hole (1) after #17).
+ * Serving-step X_n dump after a licensed I_sku write (holes (1)+(2) after #18).
  *
  * Reuses the #15/#16 controller (hung-44 license + fixture after). Writes
  * X_44.S=0813 / X_39.S=0731 on EXISTING HybridState objects, then runs ONE
  * real serving turn (runTau2Turn) that mutates that same X: messages → X.H,
- * traces → X.M. Not ping. Not get_state. Not a HybridState assembled from
- * servingByTask. Not stuffed hung44LicenseObs / #15 pong / sourceEval / a
- * fake user line.
+ * traces → X.M, serving-step E → X.E. Not ping. Not get_state. Not a
+ * HybridState assembled from servingByTask. Not stuffed hung44LicenseObs /
+ * #15 pong / sourceEval / a fake user line.
  *
- * Two names for two facts (hole (1) after #17): licenseE is the reconstructed
- * hung/timeout LICENSE. servingE is the greeting turn (not hung/timeout; not
- * a τ² user/gym step). Do not smear serving-step E as the hung license.
- * Do not write "live hung-44 then served."
+ * Holes after #18 (labels only): licenseE is an own field on X (hung/timeout
+ * LICENSE; not copied into H). X.E / servingE is attached from that
+ * runTau2Turn (hung=false, termination not timeout, plus a turn-derived
+ * fact). Dump serializes those fields OFF THE OBJECT. Not a constant
+ * overlay in viewOfServingStep. Do not write "live hung-44 then served."
  *
  * Not a score. Not invented p_hit(0813). Not a τ² result. Trainer I_weight
  * stays off. Live airline improveLoop still omits after=.
@@ -37,9 +38,15 @@ import {
 import {
   compactC,
   cGraphHash,
+  licenseEFromHungObs,
+  licenseEOnState,
   nModelOf,
   nodeListOf,
+  servingEFromTurn,
+  servingEHasTurnFact,
+  servingEOnState,
   sOnState,
+  writeHybridLicenseE,
   type HybridState,
 } from "./tau2-hybrid-state.js";
 import { runFresh39AfterMount } from "./tau2-hybrid-state-s-dump.js";
@@ -55,29 +62,38 @@ import {
   type Message,
   type Provider,
 } from "../providers.js";
-import { type CatalogPointer } from "./tau2-types.js";
+import {
+  SERVING_E_NOTE,
+  type CatalogPointer,
+  type LicenseE,
+  type ServingE,
+} from "./tau2-types.js";
 
 export const HYBRID_STATE_SERVING_STEP_DUMP_FILE = "hybrid-state-serving-step-dump.json";
 
-export const E_IS_LICENSE_NOT_SERVING =
+export { SERVING_E_NOTE };
+
+export const LICENSE_E_IS_HUNG_FIXTURE = "licenseE is the hung fixture" as const;
+
+export const X_E_IS_SERVING_STEP_FROM_TURN =
+  "X.E is serving-step E from the turn" as const;
+
+export const LEFTOVER_E_IS_LICENSE_PHRASE =
   "E is license, not serving-step E" as const;
 
 export const GREETING_NOT_LIVE_HUNG =
-  "greeting turn, not live hung-44 then served" as const;
+  "greeting, not live hung-44 then served" as const;
 
 export const LIVE_HUNG_THEN_SERVED_SMEAR = "live hung-44 then served" as const;
 
-export const SERVING_E_NOTE =
-  "greeting-turn; not a τ² user/gym step; incoming messages []" as const;
-
 export const HUNG_44_LICENSE_OBS_READING =
-  `reconstructed hung=true/timeout fixture citing sourceEval; ${E_IS_LICENSE_NOT_SERVING}; ${GREETING_NOT_LIVE_HUNG}; not a new 0731 timeout; not copied into H` as const;
+  `reconstructed hung=true/timeout fixture citing sourceEval; ${LICENSE_E_IS_HUNG_FIXTURE}; ${GREETING_NOT_LIVE_HUNG}; not a new 0731 timeout; not copied into H` as const;
 
 export const HYBRID_STATE_SERVING_STEP_DUMP_READING =
-  `Serving-step X_n dump after licensed write: same HybridState the turn mutated; H/M from that runTau2Turn, not assembled; licenseE ≠ servingE; ${E_IS_LICENSE_NOT_SERVING}; ${GREETING_NOT_LIVE_HUNG}; not a score`;
+  `Serving-step X_n dump after licensed write: same HybridState the turn mutated; H/M from that runTau2Turn, not assembled; licenseE ≠ servingE; ${LICENSE_E_IS_HUNG_FIXTURE}; ${X_E_IS_SERVING_STEP_FROM_TURN}; ${GREETING_NOT_LIVE_HUNG}; not a score`;
 
 export const SERVING_STEP_DUMP_IS_NOT =
-  `ping / get_state S0 / controller-only empty H; ${E_IS_LICENSE_NOT_SERVING}; ${GREETING_NOT_LIVE_HUNG}` as const;
+  `ping / get_state S0 / controller-only empty H; servingE not a dump overlay; ${GREETING_NOT_LIVE_HUNG}` as const;
 
 export const LIVE_TURN_REJECT_NO_KEY =
   "no OPENROUTER_API_KEY; live serving id not faked; mock turn wrote H/M onto existing X";
@@ -124,23 +140,9 @@ export function defaultServingStepProvider(sku: string): {
   return { provider: new ServingStepMockProvider(sku), mock: true };
 }
 
-export type LicenseEView = {
-  kind: "license";
-  taskId: "44";
-  hung: true;
-  arm: "I_sku";
-  termination: "timeout";
-  copiedIntoH: false;
-};
+export type LicenseEView = LicenseE;
 
-export type ServingEView = {
-  kind: "greeting-turn";
-  hung: false;
-  termination: null;
-  notTau2UserGymStep: true;
-  incomingMessages: [];
-  note: typeof SERVING_E_NOTE;
-};
+export type ServingEView = ServingE;
 
 export type CompactEnvView = {
   taskId?: string;
@@ -152,7 +154,7 @@ export type CompactEnvView = {
 export type ServingStepDumpView = {
   H: HybridState["H"];
   M: HybridState["M"];
-  E: ServingEView | CompactEnvView;
+  E: HybridState["E"] | CompactEnvView;
   licenseE?: LicenseEView;
   servingE?: ServingEView;
   C: ReturnType<typeof compactC>;
@@ -243,29 +245,17 @@ export type HybridStateServingStepDump = {
   reading: typeof HYBRID_STATE_SERVING_STEP_DUMP_READING;
 };
 
-export function licenseEFromHung44(E: HybridState["E"]): LicenseEView {
-  if (E.taskId !== "44" || E.hung !== true || E.termination !== "timeout" || E.arm !== "I_sku") {
-    throw new Error("dump refused: X.E before the serving step is not the hung-44 license");
-  }
-  return {
-    kind: "license",
-    taskId: "44",
-    hung: true,
-    arm: "I_sku",
-    termination: "timeout",
-    copiedIntoH: false,
-  };
+export function licenseEFromHung44(E: HybridState["E"] | LicenseE): LicenseEView {
+  return licenseEFromHungObs(E);
 }
 
-export function servingEFromGreetingTurn(): ServingEView {
-  return {
-    kind: "greeting-turn",
-    hung: false,
-    termination: null,
-    notTau2UserGymStep: true,
-    incomingMessages: [],
-    note: SERVING_E_NOTE,
-  };
+/** Attach servingE from a turn record. Not a no-arg constant overlay. */
+export function servingEFromGreetingTurn(turn: {
+  content?: string;
+  servedModel?: string;
+  traces?: Array<{ ts?: number }>;
+}): ServingEView {
+  return servingEFromTurn(turn);
 }
 
 /** True when a field is the hung license presented as serving-step E (no license label). */
@@ -285,6 +275,10 @@ export function readingSmearsLiveHungThenServed(text: string): boolean {
   return lower.includes(LIVE_HUNG_THEN_SERVED_SMEAR);
 }
 
+export function readingHasLeftoverLicensePhrase(text: string): boolean {
+  return text.includes(LEFTOVER_E_IS_LICENSE_PHRASE);
+}
+
 export type EnvSplitView = {
   kind?: string;
   hung?: boolean | null;
@@ -295,12 +289,15 @@ export type EnvSplitView = {
   notTau2UserGymStep?: boolean;
   incomingMessages?: unknown[];
   note?: string;
+  servedModel?: string;
+  ts?: number;
+  content?: string;
 };
 
 export type ServingStepEHonesty = {
   licenseE?: LicenseEView;
   servingE?: EnvSplitView | null;
-  X_44: { E?: EnvSplitView };
+  X_44: { E?: EnvSplitView; licenseE?: LicenseEView; servingE?: EnvSplitView };
   reading: string;
   dumpIsNot: string;
   hung44LicenseObs: string;
@@ -308,11 +305,12 @@ export type ServingStepEHonesty = {
 
 /**
  * Two names for two facts. Refuses a smear of serving-step E as the hung
- * license, and refuses "live hung-44 then served" as a claim.
+ * license, refuses a dump overlay, and refuses leftover "E is license,
+ * not serving-step E."
  */
 export function assertHonestServingStepE(dump: ServingStepEHonesty): void {
   if (!dump.licenseE || dump.licenseE.kind !== "license") {
-    throw new Error("dump refused: licenseE missing; E is license, not serving-step E");
+    throw new Error("dump refused: licenseE missing; licenseE is the hung fixture");
   }
   if (
     dump.licenseE.hung !== true ||
@@ -338,6 +336,12 @@ export function assertHonestServingStepE(dump: ServingStepEHonesty): void {
   if (serving.hung === true || serving.termination === "timeout") {
     throw new Error("dump refused: after greeting, serving-step E is hung/timeout");
   }
+  if (dump.X_44.E && dump.X_44.E.hung === true) {
+    throw new Error("dump refused: after greeting, X.E.hung is true");
+  }
+  if (!servingEHasTurnFact(serving) || !servingEHasTurnFact(dump.X_44.E)) {
+    throw new Error("dump refused: servingE has no turn-derived fact (servedModel, ts, or content)");
+  }
   if (JSON.stringify(dump.licenseE) === JSON.stringify(dump.servingE)) {
     throw new Error("dump refused: licenseE === servingE; need two names for two facts");
   }
@@ -349,12 +353,54 @@ export function assertHonestServingStepE(dump: ServingStepEHonesty): void {
     if (readingSmearsLiveHungThenServed(field)) {
       throw new Error(`dump refused: "${LIVE_HUNG_THEN_SERVED_SMEAR}" in ${name}`);
     }
-    if (!field.includes(E_IS_LICENSE_NOT_SERVING)) {
-      throw new Error(`dump refused: ${name} must say ${E_IS_LICENSE_NOT_SERVING}`);
+    if (readingHasLeftoverLicensePhrase(field)) {
+      throw new Error(`dump refused: leftover phrase "${LEFTOVER_E_IS_LICENSE_PHRASE}" in ${name}`);
     }
+  }
+  if (!dump.reading.includes(LICENSE_E_IS_HUNG_FIXTURE)) {
+    throw new Error(`dump refused: reading must say ${LICENSE_E_IS_HUNG_FIXTURE}`);
+  }
+  if (!dump.reading.includes(X_E_IS_SERVING_STEP_FROM_TURN)) {
+    throw new Error(`dump refused: reading must say ${X_E_IS_SERVING_STEP_FROM_TURN}`);
+  }
+  for (const [name, field] of [
+    ["reading", dump.reading],
+    ["dumpIsNot", dump.dumpIsNot],
+    ["hung44LicenseObs", dump.hung44LicenseObs],
+  ] as const) {
     if (!field.includes(GREETING_NOT_LIVE_HUNG)) {
       throw new Error(`dump refused: ${name} must say ${GREETING_NOT_LIVE_HUNG}`);
     }
+  }
+}
+
+/** Dump must serialize licenseE / servingE off the same X the turn mutated. */
+export function assertOwnLicenseAndServingE(X: HybridState): void {
+  if (!licenseEOnState(X)) {
+    throw new Error("dump refused: licenseE is not an own field on X");
+  }
+  if (!servingEOnState(X)) {
+    throw new Error("dump refused: servingE is not an own field on X");
+  }
+}
+
+/** True when dump servingE was constructed in the view instead of read from X. */
+export function servingEBuiltOnlyInView(
+  dump: { servingE?: unknown; X_44: { E?: unknown; servingE?: unknown } },
+  X: HybridState,
+): boolean {
+  if (!servingEOnState(X)) return true;
+  const fromX = X.servingE ?? X.E;
+  return dump.servingE !== fromX && dump.X_44.E !== X.E && dump.X_44.servingE !== fromX;
+}
+
+export function assertServingEFromX(
+  dump: { servingE?: unknown; X_44: { E?: unknown; servingE?: unknown } },
+  X: HybridState,
+): void {
+  assertOwnLicenseAndServingE(X);
+  if (servingEBuiltOnlyInView(dump, X)) {
+    throw new Error("dump refused: servingE is built only in the view");
   }
 }
 
@@ -388,27 +434,32 @@ export function assertServingStepHM(X: HybridState, turn?: Tau2TurnResult): void
   }
 }
 
-function viewOfServingStep(
+export function viewOfServingStep(
   X: HybridState,
   requireHM: boolean,
-  split?: { licenseE: LicenseEView; servingE: ServingEView },
+  requireOwnESplit = false,
 ): ServingStepDumpView {
   if (!sOnState(X)) {
     throw new Error("dump refused: HybridState has no own S; will not assemble from servingByTask");
   }
   if (requireHM) assertServingStepHM(X);
+  if (requireOwnESplit) {
+    assertOwnLicenseAndServingE(X);
+  }
   return {
     H: X.H,
     M: X.M,
-    E: split
-      ? split.servingE
+    E: requireOwnESplit
+      ? X.E
       : {
-          taskId: X.E.taskId,
+          taskId: "taskId" in X.E ? X.E.taskId : undefined,
           hung: X.E.hung,
-          arm: X.E.arm,
-          termination: X.E.termination,
+          arm: "arm" in X.E ? X.E.arm : undefined,
+          termination: X.E.termination ?? undefined,
         },
-    ...(split ? { licenseE: split.licenseE, servingE: split.servingE } : {}),
+    ...(requireOwnESplit
+      ? { licenseE: X.licenseE, servingE: X.servingE ?? (X.E as ServingEView) }
+      : {}),
     C: compactC(X.C),
     S: X.S,
     S_on_state: true,
@@ -487,8 +538,9 @@ export async function buildHybridStateServingStepDump(opts?: {
   if (!sOnState(X_44) || !sOnState(X_39)) {
     throw new Error("X_n has no own S field; dump is not servingByTask");
   }
-  const licenseE = licenseEFromHung44(X_44.E);
-  const servingE = servingEFromGreetingTurn();
+  if (!licenseEOnState(X_44)) {
+    writeHybridLicenseE(X_44, X_44.licenseE ?? X_44.E);
+  }
 
   const resolved = opts?.provider
     ? { provider: opts.provider, mock: opts.provider instanceof ServingStepMockProvider || opts.provider.name === "serving-step-mock" || opts.provider.name.startsWith("deterministic") }
@@ -505,6 +557,15 @@ export async function buildHybridStateServingStepDump(opts?: {
     throw new Error("serving-step X is not the same object the controller held");
   }
   assertServingStepHM(turned, turn);
+  assertOwnLicenseAndServingE(turned);
+  if (turned.E.hung === true) {
+    throw new Error("dump refused: after greeting, X.E.hung is true");
+  }
+  const licenseE = turned.licenseE ?? licenseEFromHung44(turned.licenseE ?? turned.E);
+  const servingE = (turned.servingE ?? turned.E) as ServingEView;
+  if (!servingEHasTurnFact(servingE)) {
+    throw new Error("dump refused: servingE has no turn-derived fact (servedModel, ts, or content)");
+  }
 
   const cAfter = ctrl.graphSku ?? ctrl.graphC0 ?? start;
   const hashAfter = cGraphHash(cAfter);
@@ -562,7 +623,7 @@ export async function buildHybridStateServingStepDump(opts?: {
     eSplit: "licenseE ≠ servingE",
     licenseE,
     servingE,
-    X_44: viewOfServingStep(X_44, true, { licenseE, servingE }),
+    X_44: viewOfServingStep(X_44, true, true),
     X_39: viewOfServingStep(X_39, false),
     C: {
       nModel,
@@ -584,6 +645,7 @@ export async function buildHybridStateServingStepDump(opts?: {
     reading: HYBRID_STATE_SERVING_STEP_DUMP_READING,
   };
   assertHonestServingStepE(dump);
+  assertServingEFromX(dump, X_44);
   return { ctrl, dump, X_44, X_39, turn, sameRef: true };
 }
 

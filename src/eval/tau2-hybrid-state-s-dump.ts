@@ -118,10 +118,10 @@ function viewOf(X: HybridState): HybridStateDumpView {
     H: X.H,
     M: X.M,
     E: {
-      taskId: X.E.taskId,
+      taskId: "taskId" in X.E ? X.E.taskId : undefined,
       hung: X.E.hung,
-      arm: X.E.arm,
-      termination: X.E.termination,
+      arm: "arm" in X.E ? X.E.arm : undefined,
+      termination: X.E.termination ?? undefined,
     },
     C: compactC(X.C),
     S: X.S,

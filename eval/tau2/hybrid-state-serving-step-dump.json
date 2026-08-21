@@ -33,7 +33,7 @@
   "jumpedIs": "S write on X_n, then one serving-step turn on that same X",
   "mounted": true,
   "sourceOfTruth": "X_n the turn mutated",
-  "dumpIsNot": "ping / get_state S0 / controller-only empty H; E is license, not serving-step E; greeting turn, not live hung-44 then served",
+  "dumpIsNot": "ping / get_state S0 / controller-only empty H; servingE not a dump overlay; greeting, not live hung-44 then served",
   "notAssembledFromServingByTask": true,
   "sameObjectAsTurnX": true,
   "servingByTaskIs": "derived cache from X.S, not the lookup",
@@ -67,7 +67,10 @@
     "termination": null,
     "notTau2UserGymStep": true,
     "incomingMessages": [],
-    "note": "greeting-turn; not a τ² user/gym step; incoming messages []"
+    "note": "greeting-turn; not a τ² user/gym step; incoming messages []",
+    "servedModel": "deepseek/deepseek-v4-pro-0813",
+    "ts": 1787297809272,
+    "content": "Hello! How can I help you today?"
   },
   "X_44": {
     "H": [
@@ -81,7 +84,10 @@
       "termination": null,
       "notTau2UserGymStep": true,
       "incomingMessages": [],
-      "note": "greeting-turn; not a τ² user/gym step; incoming messages []"
+      "note": "greeting-turn; not a τ² user/gym step; incoming messages []",
+      "servedModel": "deepseek/deepseek-v4-pro-0813",
+      "ts": 1787297809272,
+      "content": "Hello! How can I help you today?"
     },
     "licenseE": {
       "kind": "license",
@@ -97,7 +103,10 @@
       "termination": null,
       "notTau2UserGymStep": true,
       "incomingMessages": [],
-      "note": "greeting-turn; not a τ² user/gym step; incoming messages []"
+      "note": "greeting-turn; not a τ² user/gym step; incoming messages []",
+      "servedModel": "deepseek/deepseek-v4-pro-0813",
+      "ts": 1787297809272,
+      "content": "Hello! How can I help you today?"
     },
     "C": {"nModel": "deepseek/deepseek-v4-flash-0731", "nodeKeys": ["solve"], "graphHash": "37ba3d4356cdb3f2667acd135ccb40df8675514bd9662409007f3c9180292cee"},
     "S": {"sku": "deepseek/deepseek-v4-pro-0813", "servingPaused": false},
@@ -127,7 +136,7 @@
   },
   "fresh39": {"S": {"sku": "deepseek/deepseek-v4-flash-0731", "servingPaused": false}, "inherited0813": false},
   "sourceEval": ["improve-live-0731-iweight-44-hung.json", "improve-live-0731-self-3944-postgate.json", "airline-live-self-3944-postgate-r0.json"],
-  "hung44LicenseObs": "reconstructed hung=true/timeout fixture citing sourceEval; E is license, not serving-step E; greeting turn, not live hung-44 then served; not a new 0731 timeout; not copied into H",
+  "hung44LicenseObs": "reconstructed hung=true/timeout fixture citing sourceEval; licenseE is the hung fixture; greeting, not live hung-44 then served; not a new 0731 timeout; not copied into H",
   "trainerIWeight": "unimplemented; off the claim",
-  "reading": "Serving-step X_n dump after licensed write: same HybridState the turn mutated; H/M from that runTau2Turn, not assembled; licenseE ≠ servingE; E is license, not serving-step E; greeting turn, not live hung-44 then served; not a score"
+  "reading": "Serving-step X_n dump after licensed write: same HybridState the turn mutated; H/M from that runTau2Turn, not assembled; licenseE ≠ servingE; licenseE is the hung fixture; X.E is serving-step E from the turn; greeting, not live hung-44 then served; not a score"
 }

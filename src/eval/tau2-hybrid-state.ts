@@ -10,8 +10,11 @@ import { findNode, flatten, type AgentGraph } from "../ir.js";
 import { type Message } from "../providers.js";
 import { type Trace } from "../ir.js";
 import {
+  SERVING_E_NOTE,
   type CatalogPointer,
   type HybridState,
+  type LicenseE,
+  type ServingE,
   type Tau2Obs,
 } from "./tau2-types.js";
 import { catalogPointer, SERVING_MODEL, cTopology } from "./tau2-weight.js";
@@ -29,6 +32,7 @@ export function hybridState(init: {
   E: Tau2Obs;
   C: AgentGraph;
   S?: CatalogPointer;
+  licenseE?: LicenseE;
 }): HybridState {
   const X: HybridState = {
     H: init.H ?? [],
@@ -37,6 +41,144 @@ export function hybridState(init: {
     C: init.C,
     S: catalogPointer(init.S?.sku ?? SERVING_MODEL),
   };
+  if (init.licenseE) {
+    writeHybridLicenseE(X, init.licenseE);
+  } else if (isHung44IskuLicense(init.E)) {
+    writeHybridLicenseE(X, init.E);
+  }
+  return X;
+}
+
+/** Hung/timeout I_sku LICENSE for task 44. Not serving-step E. */
+export function isHung44IskuLicense(E: HybridState["E"] | null | undefined): E is Tau2Obs & {
+  taskId: "44";
+  hung: true;
+  arm: "I_sku";
+  termination: "timeout";
+} {
+  if (!E) return false;
+  return (
+    "taskId" in E &&
+    E.taskId === "44" &&
+    E.hung === true &&
+    E.termination === "timeout" &&
+    (!("arm" in E) || E.arm === "I_sku" || E.arm === undefined)
+  );
+}
+
+export function licenseEOnState(X: HybridState | undefined | null): boolean {
+  return Boolean(
+    X &&
+      Object.prototype.hasOwnProperty.call(X, "licenseE") &&
+      X.licenseE &&
+      X.licenseE.kind === "license" &&
+      X.licenseE.copiedIntoH === false,
+  );
+}
+
+export function servingEOnState(X: HybridState | undefined | null): boolean {
+  if (!X) return false;
+  const ownServing = Object.prototype.hasOwnProperty.call(X, "servingE") && X.servingE;
+  const ownE = Object.prototype.hasOwnProperty.call(X, "E") && isServingStepE(X.E);
+  return Boolean(ownServing || ownE);
+}
+
+export function isServingStepE(E: HybridState["E"] | ServingE | null | undefined): E is ServingE {
+  if (!E) return false;
+  return (
+    "kind" in E &&
+    E.kind === "greeting-turn" &&
+    E.hung === false &&
+    E.termination !== "timeout" &&
+    servingEHasTurnFact(E)
+  );
+}
+
+export function servingEHasTurnFact(E: {
+  servedModel?: string;
+  ts?: number;
+  content?: string;
+} | null | undefined): boolean {
+  if (!E) return false;
+  return Boolean(
+    (E.servedModel && E.servedModel.length > 0) ||
+      E.ts != null ||
+      (E.content != null && E.content.length > 0),
+  );
+}
+
+export function licenseEFromHungObs(E: HybridState["E"] | LicenseE): LicenseE {
+  if ("kind" in E && E.kind === "license") {
+    if (E.copiedIntoH !== false) {
+      throw new Error("dump refused: licenseE must stay out of H");
+    }
+    return E;
+  }
+  if (!isHung44IskuLicense(E)) {
+    throw new Error("dump refused: X.E is not the reconstructed hung/timeout I_sku license");
+  }
+  return {
+    kind: "license",
+    taskId: "44",
+    hung: true,
+    arm: "I_sku",
+    termination: "timeout",
+    copiedIntoH: false,
+  };
+}
+
+/** Write licenseE onto existing X. Not copied into H. */
+export function writeHybridLicenseE(
+  X: HybridState,
+  source?: HybridState["E"] | LicenseE,
+): HybridState {
+  X.licenseE = licenseEFromHungObs(source ?? X.E);
+  return X;
+}
+
+/** Turn record enough to attach serving-step E. Not a constant overlay. */
+export type ServingTurnRecord = {
+  content?: string;
+  servedModel?: string;
+  traces?: Array<{ ts?: number }>;
+};
+
+export function servingEFromTurn(
+  turn: ServingTurnRecord,
+  incoming: unknown[] = [],
+): ServingE {
+  if (incoming.length !== 0) {
+    throw new Error("servingE refused: greeting turn incoming messages must be []");
+  }
+  const serving: ServingE = {
+    kind: "greeting-turn",
+    hung: false,
+    termination: null,
+    notTau2UserGymStep: true,
+    incomingMessages: [],
+    note: SERVING_E_NOTE,
+  };
+  if (turn.servedModel) serving.servedModel = turn.servedModel;
+  if (turn.traces?.[0]?.ts != null) serving.ts = turn.traces[0].ts;
+  if (turn.content != null && turn.content.length > 0) serving.content = turn.content;
+  if (!servingEHasTurnFact(serving)) {
+    throw new Error("servingE refused: no turn-derived fact (servedModel, ts, or content)");
+  }
+  return serving;
+}
+
+/**
+ * Write serving-step E onto the same X the turn mutated.
+ * X.E is the turn record; servingE is an alias of that object.
+ */
+export function writeHybridServingE(
+  X: HybridState,
+  turn: ServingTurnRecord,
+  incoming: unknown[] = [],
+): HybridState {
+  const serving = servingEFromTurn(turn, incoming);
+  X.E = serving;
+  X.servingE = serving;
   return X;
 }
 
