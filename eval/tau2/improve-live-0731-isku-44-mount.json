@@ -5,21 +5,11 @@
   "closedLoop": false,
   "maxRounds": 0,
   "domain": "airline",
-  "taskIds": [
-    "44"
-  ],
+  "taskIds": ["44"],
   "arm44": "I_sku",
   "license": "hung",
   "slice": "I_sku",
-  "applyScope": {
-    "waitKept": [],
-    "looped": [
-      "39"
-    ],
-    "weighted": [
-      "44"
-    ]
-  },
+  "applyScope": {"waitKept": [], "looped": ["39"], "weighted": ["44"]},
   "servingPaused": false,
   "trained": false,
   "notFineTuning": true,
@@ -31,9 +21,9 @@
   "notTau2Lift": true,
   "omitAfter": false,
   "vsRejectCell": "improve-live-0731-isku-44-reject.json",
-  "jumped": false,
+  "jumped": true,
   "mounted": true,
-  "rejected": true,
+  "rejected": false,
   "gate": {
     "action": "mount",
     "before": 0,
@@ -43,16 +33,16 @@
     "notTau2Lift": true,
     "reason": "fixtureAfter after=1 > before=0; incompleteFixture; not a τ² lift; not measured 0813 on airline; 0813 existing is not a gate"
   },
-  "servingModelAfter": null,
+  "servingModelAfter": "deepseek/deepseek-v4-pro-0813",
   "proposedModel": "deepseek/deepseek-v4-pro-0813",
   "controllerServing": "39.sku=0731 44.sku=0813",
   "live": true,
   "controllerReplay": true,
   "liveServe": {
-    "ok": false,
-    "servingModelId": null,
-    "clientModel": null,
-    "reason": "no OPENROUTER_API_KEY; live 0813 serve not run; serving id not faked"
+    "ok": true,
+    "servingModelId": "deepseek/deepseek-v4-pro-0813",
+    "clientModel": "deepseek/deepseek-v4-pro-0813",
+    "contentChars": 4
   },
   "nTurns": 9,
   "nHungTrials": 1,
@@ -62,5 +52,5 @@
     "improve-live-0731-self-3944-postgate.json",
     "airline-live-self-3944-postgate-r0.json"
   ],
-  "reading": "Protocol cell, not a score. Replay of saved live hung-44 traces through the I_sku controller with fixture after (not omit-after #12 reject); S for 44 may be 0813. Live 0813 serve did not jump: no OPENROUTER_API_KEY; live 0813 serve not run; serving id not faked. Not invented p_hit(0813). Not a τ² lift."
+  "reading": "Protocol cell, not a score. Replay of saved live hung-44 traces through the I_sku controller with fixture after (not omit-after #12 reject); S for 44 rebound to 0813; one live OpenRouter completion recorded serving model id 0813. Not invented p_hit(0813). Not a τ² lift. Not a Pro-vs-Flash score."
 }
