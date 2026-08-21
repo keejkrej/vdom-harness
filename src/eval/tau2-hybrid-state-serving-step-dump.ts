@@ -14,6 +14,10 @@
  * fact). Dump serializes those fields OFF THE OBJECT. Not a constant
  * overlay in viewOfServingStep. Do not write "live hung-44 then served."
  *
+ * Honesty keep after #19: if licenseE is not already an own field on X_44,
+ * dump refuses. Do not invent licenseE from X.E. controlEpisode writes
+ * licenseE on hung-44; hybridState may still take an explicit init.licenseE.
+ *
  * Not a score. Not invented p_hit(0813). Not a τ² result. Trainer I_weight
  * stays off. Live airline improveLoop still omits after=.
  */
@@ -46,7 +50,6 @@ import {
   servingEHasTurnFact,
   servingEOnState,
   sOnState,
-  writeHybridLicenseE,
   type HybridState,
 } from "./tau2-hybrid-state.js";
 import { runFresh39AfterMount } from "./tau2-hybrid-state-s-dump.js";
@@ -539,7 +542,7 @@ export async function buildHybridStateServingStepDump(opts?: {
     throw new Error("X_n has no own S field; dump is not servingByTask");
   }
   if (!licenseEOnState(X_44)) {
-    writeHybridLicenseE(X_44, X_44.licenseE ?? X_44.E);
+    throw new Error("dump refused: licenseE missing");
   }
 
   const resolved = opts?.provider
@@ -561,7 +564,10 @@ export async function buildHybridStateServingStepDump(opts?: {
   if (turned.E.hung === true) {
     throw new Error("dump refused: after greeting, X.E.hung is true");
   }
-  const licenseE = turned.licenseE ?? licenseEFromHung44(turned.licenseE ?? turned.E);
+  if (!turned.licenseE) {
+    throw new Error("dump refused: licenseE missing");
+  }
+  const licenseE = turned.licenseE;
   const servingE = (turned.servingE ?? turned.E) as ServingEView;
   if (!servingEHasTurnFact(servingE)) {
     throw new Error("dump refused: servingE has no turn-derived fact (servedModel, ts, or content)");

@@ -1798,6 +1798,22 @@ function expectThrow(fn: () => void, needle: string, msg: string): void {
   assert(threw, msg);
 }
 
+async function expectThrowAsync(
+  fn: () => Promise<unknown>,
+  needle: string,
+  msg: string,
+): Promise<void> {
+  let threw = false;
+  try {
+    await fn();
+  } catch (err) {
+    threw = true;
+    const text = err instanceof Error ? err.message : String(err);
+    assert(text.includes(needle), `${msg}: ${text}`);
+  }
+  assert(threw, msg);
+}
+
 async function testMissingX39ThrowsNoAssemble(): Promise<void> {
   expectThrow(
     () => requireHybridX({}, "39"),
@@ -2107,6 +2123,21 @@ async function testServingStepDumpRefusesOverlayAndMissingOwnFields(): Promise<v
     () => assertOwnLicenseAndServingE(noLicense),
     "licenseE is not an own field on X",
     "dump refuses when licenseE is not an own field on X",
+  );
+
+  const missingOwn = ctrl.X["44"];
+  assert(missingOwn, "controller installed X_44 for missing-own-field dump");
+  delete missingOwn.licenseE;
+  assert(!licenseEOnState(missingOwn), "own-field licenseE is now absent");
+  assert(missingOwn.E.hung === true, "X.E is still the hung fixture; dump must not invent licenseE from it");
+  await expectThrowAsync(
+    () =>
+      buildHybridStateServingStepDump({
+        ctrl,
+        provider: new ServingStepMockProvider(CATALOG_JUMP_MODEL),
+      }),
+    "licenseE missing",
+    "serving-step dump refuses when X.licenseE is absent (own-field missing)",
   );
 }
 
