@@ -1249,6 +1249,17 @@ def build_parser() -> argparse.ArgumentParser:
             "fixture (no tau2 slice, no API key). Not I_sku and not a θ jump."
         ),
     )
+    p.add_argument(
+        "--isku-mount-cell",
+        action="store_true",
+        help=(
+            "Honest I_sku mount protocol cell: replay hung-44 license through "
+            "controlBatch / Obs (same sources as #12 reject), call i_sku WITH "
+            "fixture after, then one live OpenRouter completion on 0813. "
+            "Not a τ² score. Not invented p_hit(0813). Writes "
+            "eval/tau2/improve-live-0731-isku-44-mount.json."
+        ),
+    )
     return p
 
 
@@ -1298,8 +1309,40 @@ def _resolve_slice(args: argparse.Namespace) -> tuple[str, list[str], bool, str]
     return domain, task_ids, True, user
 
 
+def run_isku_mount_cell(*, live_serve: bool = True, write: bool = True) -> Path:
+    """Dedicated I_sku mount protocol cell. Does not run the live airline improveLoop.
+
+    Live airline improveLoop omits after so it cannot invent p_hit(0813).
+    This path calls I_sku WITH fixture after, then one live 0813 serve.
+    """
+    import shutil
+    import subprocess
+
+    _apply_openrouter_defaults()
+    npx = shutil.which("npx")
+    if npx is None:
+        raise SystemExit("npx not found; install Node.js >= 18")
+    script = REPO_ROOT / "src" / "eval" / "tau2-isku-mount-cell.ts"
+    cmd = [npx, "--yes", "tsx", str(script)]
+    if not live_serve:
+        cmd.append("--no-live")
+    if not write:
+        cmd.append("--no-write")
+    print("[isku-mount-cell] " + " ".join(cmd), flush=True)
+    completed = subprocess.run(cmd, cwd=str(REPO_ROOT), check=False)
+    out = EVAL_DIR / "improve-live-0731-isku-44-mount.json"
+    if completed.returncode not in {0, 2}:
+        raise SystemExit(completed.returncode)
+    if write and not out.is_file():
+        raise SystemExit(f"mount cell did not write {out}")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.isku_mount_cell:
+        run_isku_mount_cell()
+        return 0
     if args.weight_fixture or (args.weight and os.environ.get("VDOM_WEIGHT_FIXTURE") == "1"):
         run_weight_fixture_improve()
         return 0

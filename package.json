@@ -13,6 +13,7 @@
     "eval:tau2:smoke": "PYTHONPATH=python python3 -m tau2_vdom --domain mock --smoke",
     "eval:tau2:improve": "PYTHONPATH=python python3 -m tau2_vdom.improve",
     "eval:tau2:improve:weight": "PYTHONPATH=python python3 -m tau2_vdom.improve --weight",
+    "eval:tau2:isku-mount-cell": "PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell",
     "eval:tau2:obs": "PYTHONPATH=python python3 -m tau2_vdom.test_obs && PYTHONPATH=python python3 -m tau2_vdom.test_weight"
   },
   "engines": {

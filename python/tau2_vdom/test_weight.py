@@ -17,8 +17,10 @@ from tau2_vdom.improve import (
     incomplete_reason,
     incomplete_train_traces,
     is_incomplete_episode,
+    run_isku_mount_cell,
     run_weight_fixture_improve,
 )
+from tau2_vdom.runner import control_batch
 from tau2_vdom.sidecar import default_sidecar
 
 
@@ -177,6 +179,78 @@ def test_isku_writes_s_not_c() -> None:
     assert ping.get("servingPaused") is False
 
 
+def test_isku_mount_cell_controller_no_live() -> None:
+    """Mount-cell controller path: fixture after, no live. 44→0813, 39 stays 0731."""
+    sidecar = _reset_sidecar()
+    obs39 = {
+        "taskId": "39",
+        "nSteps": 4,
+        "nSuccessProxy": 0,
+        "lastActions": ["cancel_reservation"],
+        "channels": ["env"],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_loop",
+        "refusedCancel": True,
+        "inventedPolicy": True,
+        "hung": False,
+        "techniqueRecommendation": "policy-checklist",
+        "missedActions": [{"name": "cancel_reservation"}],
+    }
+    obs44 = {
+        "taskId": "44",
+        "nSteps": 0,
+        "nSuccessProxy": 0,
+        "lastActions": [],
+        "channels": [],
+        "critique": "",
+        "toolFailures": 0,
+        "repeatActions": 0,
+        "arm": "I_sku",
+        "hung": True,
+        "termination": "timeout",
+    }
+    ctrl = control_batch([obs39, obs44])
+    assert ctrl["buckets"]["44"] == "I_sku"
+    assert ctrl["buckets"]["39"] == "I_loop"
+    assert ctrl["applyScope"]["waitKept"] == []
+    assert ctrl["applyScope"]["weighted"] == ["44"]
+    loop = sidecar.request({"op": "i_loop", "obs": [obs39, obs44], "model": "deterministic"})
+    assert loop.get("applyScope", {}).get("weighted") == ["44"]
+    assert loop.get("servingPaused") is False
+    # Dedicated path: i_sku WITH after (live airline improveLoop omits after).
+    mount = _sidecar_catalog_jump(sidecar, before=0.0, after=1.0)
+    assert mount["mounted"] is True
+    assert mount["servingPaused"] is False
+    assert mount["trained"] is False
+    assert mount["serving"]["sku"] == CATALOG_JUMP_MODEL
+    turn44 = sidecar.request(
+        {
+            "op": "turn",
+            "taskId": "44",
+            "model": "deterministic",
+            "policy": "",
+            "tools": [],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+    turn39 = sidecar.request(
+        {
+            "op": "turn",
+            "taskId": "39",
+            "model": "deterministic",
+            "policy": "",
+            "tools": [],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+    assert turn44.get("servingModel") == CATALOG_JUMP_MODEL
+    assert turn39.get("servingModel") == SERVING_MODEL
+    assert turn44.get("servingPaused") is False
+    assert callable(run_isku_mount_cell)
+
+
 def test_weight_fixture_writes_report() -> None:
     path = run_weight_fixture_improve()
     latest = EVAL_DIR / "latest-improve.json"
@@ -210,6 +284,7 @@ def main() -> int:
         test_incomplete_fixture_shape,
         test_catalog_jump_mounts_0813,
         test_isku_writes_s_not_c,
+        test_isku_mount_cell_controller_no_live,
         test_weight_fixture_writes_report,
     ]
     failed = 0
