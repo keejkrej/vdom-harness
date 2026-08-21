@@ -46,6 +46,36 @@ export function writeHybridS(X: HybridState, serving: CatalogPointer): HybridSta
   return X;
 }
 
+/** Append this turn's messages onto existing X.H. Mutates the same object. */
+export function writeHybridH(X: HybridState, messages: Message[]): HybridState {
+  if (messages.length === 0) return X;
+  X.H.push(...messages);
+  return X;
+}
+
+/** Append this turn's traces onto existing X.M. Mutates the same object. */
+export function writeHybridM(X: HybridState, traces: Trace[]): HybridState {
+  if (traces.length === 0) return X;
+  X.M.push(...traces);
+  return X;
+}
+
+/**
+ * X["39"] must already exist. Do not assemble a HybridState or invent S=0731.
+ */
+export function requireHybridX(
+  store: Record<string, HybridState> | HybridStore,
+  taskId: string,
+): HybridState {
+  const X = store instanceof Map ? store.get(taskId) : store[taskId];
+  if (!X) {
+    throw new Error(
+      `X["${taskId}"] missing; will not assemble HybridState or invent S=0731`,
+    );
+  }
+  return X;
+}
+
 export function sOnState(X: HybridState | undefined | null): boolean {
   return Boolean(X && Object.prototype.hasOwnProperty.call(X, "S") && X.S && typeof X.S.sku === "string");
 }

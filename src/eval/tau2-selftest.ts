@@ -68,8 +68,17 @@ import {
 import {
   buildHybridStateSDump,
   HYBRID_STATE_S_DUMP_READING,
+  runFresh39AfterMount,
 } from "./tau2-hybrid-state-s-dump.js";
-import { sOnState } from "./tau2-hybrid-state.js";
+import { hybridState, requireHybridX, sOnState, writeHybridH, writeHybridM } from "./tau2-hybrid-state.js";
+import {
+  assertServingStepHM,
+  buildHybridStateServingStepDump,
+  HYBRID_STATE_SERVING_STEP_DUMP_READING,
+  LIVE_TURN_REJECT_NO_KEY,
+  SERVING_STEP_DUMP_IS_NOT,
+  ServingStepMockProvider,
+} from "./tau2-hybrid-state-serving-step-dump.js";
 
 let passed = 0;
 let failed = 0;
@@ -1755,6 +1764,159 @@ async function testHybridStateSDumpAfterLicensedWrite(): Promise<void> {
   assertEq(fresh.episodes[0]?.X.S.sku, SERVING_MODEL, "fresh episode X.S is 0731");
 }
 
+function expectThrow(fn: () => void, needle: string, msg: string): void {
+  let threw = false;
+  try {
+    fn();
+  } catch (err) {
+    threw = true;
+    const text = err instanceof Error ? err.message : String(err);
+    assert(text.includes(needle), `${msg}: ${text}`);
+  }
+  assert(threw, msg);
+}
+
+async function testMissingX39ThrowsNoAssemble(): Promise<void> {
+  expectThrow(
+    () => requireHybridX({}, "39"),
+    'X["39"] missing',
+    "missing X[\"39\"] throws",
+  );
+  expectThrow(
+    () => requireHybridX({}, "39"),
+    "will not assemble HybridState or invent S=0731",
+    "missing X[\"39\"] does not invent S=0731",
+  );
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const X = runFresh39AfterMount(start);
+  assert(sOnState(X), "fresh 39 path still returns an X with own S");
+  assertEq(X.S.sku, SERVING_MODEL, "fresh 39-only X.S is 0731");
+}
+
+async function testServingStepDumpRefusesEmptyAndStuffedHM(): Promise<void> {
+  const { ctrl } = runIskuMountCellController();
+  const X = ctrl.X["44"];
+  assert(X, "controller installed X_44");
+  assertEq(X.H.length, 0, "controller-only H is empty before the serving step");
+  assertEq(X.M.length, 0, "controller-only M is empty before the serving step");
+  expectThrow(
+    () => assertServingStepHM(X),
+    "empty H/M",
+    "serving-step dump refuses empty H/M",
+  );
+
+  const stuffed = hybridState({
+    E: hung44LicenseObs(),
+    C: tau2Graph("one-shot", SERVING_MODEL),
+    S: catalogPointer(CATALOG_JUMP_MODEL),
+  });
+  writeHybridH(stuffed, [{ role: "user", content: "Reply with the single word pong." }]);
+  writeHybridM(stuffed, [{ nodeKey: "fake", role: "fake", input: "", output: "pong", ts: Date.now() }]);
+  expectThrow(
+    () => assertServingStepHM(stuffed),
+    "Reply with the single word pong.",
+    "refuses #15 pong stuffed into H",
+  );
+
+  const stuffedEval = hybridState({
+    E: hung44LicenseObs(),
+    C: tau2Graph("one-shot", SERVING_MODEL),
+    S: catalogPointer(CATALOG_JUMP_MODEL),
+  });
+  writeHybridH(stuffedEval, [{ role: "user", content: SOURCE_EVAL[0] }]);
+  writeHybridM(stuffedEval, [{ nodeKey: "fake", role: "fake", input: "", output: SOURCE_EVAL[0], ts: Date.now() }]);
+  expectThrow(
+    () => assertServingStepHM(stuffedEval),
+    SOURCE_EVAL[0],
+    "refuses sourceEval stuffed into H",
+  );
+}
+
+async function testHybridStateServingStepDumpAfterLicensedWrite(): Promise<void> {
+  const mock0813 = new ServingStepMockProvider(CATALOG_JUMP_MODEL);
+  const mock0731 = new DeterministicProvider(SERVING_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, mock0731);
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const dom = new RuntimeDOM();
+  dom.reconcile(start);
+
+  const { ctrl } = runIskuMountCellController({ provider: mock0813, dom });
+  const X_44 = ctrl.X["44"];
+  const X_39 = ctrl.X["39"];
+  assert(X_44 !== undefined, "controller installed X_44");
+  assert(X_39 !== undefined, "controller installed X_39");
+  assert(sOnState(X_44), "S is an own field on X_44");
+  assert(sOnState(X_39), "S is an own field on X_39");
+  assert(X_44 === ctrl.episodes[1]?.X, "X_44 is the episode HybridState, not a later assembly");
+  assertEq(X_44.S.sku, CATALOG_JUMP_MODEL, "X_44.S.sku is 0813");
+  assertEq(X_44.S.servingPaused, false, "X_44.S.servingPaused=false");
+  assertEq(X_39.S.sku, SERVING_MODEL, "X_39.S.sku is 0731");
+  assertEq(findNode(X_44.C, "solve")?.model, SERVING_MODEL, "X_44.C n.model stays 0731");
+  assertEq(findNode(ctrl.graphC0!, "solve")?.model, SERVING_MODEL, "C n.model stays 0731");
+  assert(sameCTopology(ctrl.graphSku ?? start, start), "C topology stays");
+  assertEq(
+    dom.current.get("solve")?.provider?.model,
+    SERVING_MODEL,
+    "no PhysicalNode.provider spray",
+  );
+  const p39 = servingProviderForTask(ctrl, "39", mock0731, dom);
+  const p44 = servingProviderForTask(ctrl, "44", mock0731, dom);
+  assertEq(p39.model, SERVING_MODEL, "mixed later serving 39 typed by X.S is 0731");
+  assertEq(p44.model, CATALOG_JUMP_MODEL, "mixed later serving 44 typed by X.S is 0813");
+
+  const beforeH = X_44.H;
+  const beforeM = X_44.M;
+  const { dump, X_44: dump44, X_39: dump39, turn, sameRef } = await buildHybridStateServingStepDump({
+    ctrl,
+    provider: mock0813,
+  });
+  assert(sameRef, "sameRef from the turn");
+  assert(dump44 === X_44, "dump serializes the same X_44 the turn mutated");
+  assert(dump39 === X_39, "dump serializes the live X_39 object");
+  assert(dump44.H === beforeH, "H is the same array on the existing X");
+  assert(dump44.M === beforeM, "M is the same array on the existing X");
+  assert(dump.sameObjectAsTurnX, "JSON records same-object");
+  assert(dump.notAssembledFromServingByTask, "not assembled from servingByTask");
+  assert(X_44.H.length > 0, "X_44.H non-empty after the turn");
+  assert(X_44.M.length > 0, "X_44.M non-empty after the turn");
+  assert(X_44.H.some((m) => m.role === "assistant" && m.content === turn.content), "H assistant is this turn");
+  assert(X_44.H.some((m) => m.role === "system" && m.content === turn.system), "H system is this turn");
+  assert(!X_44.H.some((m) => m.role === "user"), "dump did not invent a fake user line");
+  assert(X_44.M.some((t) => t.output === turn.content && turn.traces.some((tr) => tr.ts === t.ts)), "M is this turn's traces");
+  assert(turn.content.startsWith("serving-step-turn:"), "assistant content is the mock turn stamp");
+  assert(dump.X_44.H === X_44.H, "dump view H is the same array");
+  assert(dump.X_44.M === X_44.M, "dump view M is the same array");
+  assertEq(dump.X_44.S.sku, CATALOG_JUMP_MODEL, "dump X_44.S.sku=0813");
+  assertEq(dump.X_44.S.servingPaused, false, "dump X_44.S.servingPaused=false");
+  assertEq(dump.X_39.S.sku, SERVING_MODEL, "dump X_39.S.sku=0731");
+  assertEq(dump.C.nModel, SERVING_MODEL, "dump C n.model stays 0731");
+  assertEq(dump.C.nModelUnchanged, true, "n.model unchanged");
+  assertEq(dump.pHit0813, null, "does not invent p_hit(0813)");
+  assertEq(dump.notInventedPHit0813, true, "notInventedPHit0813");
+  assertEq(dump.protocolCell, true, "protocolCell");
+  assertEq(dump.fixtureAfter, true, "fixture after stays labeled");
+  assertEq(dump.trained, false, "trainer I_weight stays off");
+  assertEq(dump.liveServingId, null, "live serving id not faked");
+  assertEq(dump.servingIdNotFaked, true, "servingIdNotFaked");
+  assertEq(dump.mockProviderTurn, true, "mock turn labeled");
+  assertEq(dump.liveTurnRejected, true, "live turn rejected with reason");
+  assertEq(dump.liveTurnRejectReason, LIVE_TURN_REJECT_NO_KEY, "reject reason does not invent a serving id");
+  assertEq(dump.dumpIsNot, SERVING_STEP_DUMP_IS_NOT, "dump is not ping/get_state/empty H");
+  assertEq(dump.servingStep.op, "runTau2Turn", "stamp says runTau2Turn");
+  assertEq(dump.servingStep.sameObjectAsTurnX, true, "stamp same-object");
+  assertEq(dump.servingStep.hFromTurn, true, "stamp H from turn");
+  assertEq(dump.servingStep.mFromTurn, true, "stamp M from turn");
+  assert(dump.servingStep.assistantPreview.startsWith("serving-step-turn:"), "stamp previews the turn content");
+  assertEq(dump.reading, HYBRID_STATE_SERVING_STEP_DUMP_READING, "reading is the serving-step sentence");
+  assertEq(dump.fresh39.S.sku, SERVING_MODEL, "fresh 39-only X.S is 0731");
+  assertEq(dump.liveAirlineImproveLoopOmitsAfter, true, "live airline improveLoop still omits after");
+  const blob = JSON.stringify(dump.X_44);
+  assert(!blob.includes("Reply with the single word pong."), "H/M are not the #15 pong");
+  assert(!blob.includes(SOURCE_EVAL[0]!), "H/M are not sourceEval JSON");
+  assert(!blob.includes("reconstructed hung=true/timeout"), "H/M are not hung44LicenseObs");
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -1796,6 +1958,9 @@ async function main(): Promise<void> {
     ["fresh 39-only batch does not inherit process servingSku=0813", testFreshBatchDoesNotInheritProcessServingSku],
     ["I_sku mount-cell controller: fixture after, no live, 44=0813 39=0731 no spray", testIskuMountCellControllerFixtureAfterNoLive],
     ["X_n.S dump after licensed write: HybridState.S on the state object", testHybridStateSDumpAfterLicensedWrite],
+    ["missing X[\"39\"] throws; does not invent S=0731", testMissingX39ThrowsNoAssemble],
+    ["serving-step dump refuses empty H/M and stuffed pong/sourceEval", testServingStepDumpRefusesEmptyAndStuffedHM],
+    ["serving-step X_n dump: same object, H/M from runTau2Turn", testHybridStateServingStepDumpAfterLicensedWrite],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {

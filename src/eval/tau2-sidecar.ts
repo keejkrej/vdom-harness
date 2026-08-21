@@ -473,6 +473,7 @@ async function handle(line: string): Promise<void> {
       graph: live,
       model: servingModel,
       provider,
+      X: Xn,
     });
     if (
       req.taskId &&

@@ -10,8 +10,9 @@ import {
 import { tau2Graph } from "./tau2-graph.js";
 import { executeGraphSelfTool, gymToolCalls, withGraphSelfTools, type GraphToolEdit } from "./tau2-graph-tools.js";
 import { serializeKernelC, stripGoldIds } from "./tau2-kernel.js";
-import { type Tau2Technique } from "./tau2-types.js";
+import { type HybridState, type Tau2Technique } from "./tau2-types.js";
 import { AIRLINE_POLICY_CHECKLIST } from "./tau2-policy.js";
+import { writeHybridH, writeHybridM } from "./tau2-hybrid-state.js";
 
 const MAX_SELF_TOOL_ITERS = 4;
 
@@ -31,15 +32,38 @@ export type Tau2TurnOpts = {
   graph?: AgentGraph;
   provider?: Provider;
   model?: string;
+  /**
+   * Existing HybridState the turn uses (C / S). After the turn, messages
+   * go to X.H and traces to X.M on this same object. Not a new assembly.
+   */
+  X?: HybridState;
 };
 
 export type Tau2TurnResult = Completion & {
   traces: Trace[];
   system: string;
+  /** Messages this turn used / produced. Source of X.H. */
+  messages: Message[];
   graph: AgentGraph;
   graphEdits: GraphToolEdit[];
   servingPaused: false;
 };
+
+/** Messages this serving turn used. Not hung44LicenseObs / ping / sourceEval. */
+export function messagesFromServingTurn(
+  incoming: Message[],
+  turn: Pick<Tau2TurnResult, "system" | "content" | "toolCalls">,
+): Message[] {
+  const out: Message[] = [];
+  if (turn.system) out.push({ role: "system", content: turn.system });
+  out.push(...incoming);
+  out.push({
+    role: "assistant",
+    content: turn.content,
+    tool_calls: turn.toolCalls,
+  });
+  return out;
+}
 
 function completeTurn(
   provider: Provider,
@@ -179,15 +203,24 @@ function finish(
   system: string,
   graph: AgentGraph,
   edits: GraphToolEdit[],
+  incoming: Message[],
+  X?: HybridState,
 ): Tau2TurnResult {
-  return {
+  const result: Tau2TurnResult = {
     ...acted,
     traces,
     system,
+    messages: [],
     graph,
     graphEdits: edits,
     servingPaused: false,
   };
+  result.messages = messagesFromServingTurn(incoming, result);
+  if (X) {
+    writeHybridH(X, result.messages);
+    writeHybridM(X, result.traces);
+  }
+  return result;
 }
 
 /**
@@ -230,7 +263,7 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
       traces,
       input,
     });
-    return finish(out.acted, traces, out.system, out.graph, out.edits);
+    return finish(out.acted, traces, out.system, out.graph, out.edits, convo, opts.X);
   }
 
   if (technique === "policy-checklist") {
@@ -246,7 +279,7 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
       traces,
       input,
     });
-    return finish(out.acted, traces, out.system, out.graph, out.edits);
+    return finish(out.acted, traces, out.system, out.graph, out.edits, convo, opts.X);
   }
 
   if (technique === "validator") {
@@ -277,7 +310,7 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
       traces,
       input,
     });
-    return finish(out.acted, traces, out.system, out.graph, out.edits);
+    return finish(out.acted, traces, out.system, out.graph, out.edits, convo, opts.X);
   }
 
   if (technique === "reflexion" && toolFailed(convo)) {
@@ -305,7 +338,7 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
       traces,
       input,
     });
-    return finish(out.acted, traces, out.system, out.graph, out.edits);
+    return finish(out.acted, traces, out.system, out.graph, out.edits, convo, opts.X);
   }
 
   const out = await actingTurn({
@@ -319,7 +352,7 @@ export async function runTau2Turn(opts: Tau2TurnOpts): Promise<Tau2TurnResult> {
     traces,
     input,
   });
-  return finish(out.acted, traces, out.system, out.graph, out.edits);
+  return finish(out.acted, traces, out.system, out.graph, out.edits, convo, opts.X);
 }
 
 export function filterGymToolCalls(calls?: ToolCallOut[]): ToolCallOut[] | undefined {

@@ -1270,6 +1270,15 @@ def build_parser() -> argparse.ArgumentParser:
             "eval/tau2/hybrid-state-s-dump.json."
         ),
     )
+    p.add_argument(
+        "--hybrid-state-serving-step-dump",
+        action="store_true",
+        help=(
+            "Serving-step X_n dump after licensed I_sku write (hole (1) after "
+            "#16). One runTau2Turn on the existing HybridState; H/M from that "
+            "turn. Not a score. Writes eval/tau2/hybrid-state-serving-step-dump.json."
+        ),
+    )
     return p
 
 
@@ -1370,8 +1379,33 @@ def run_hybrid_state_s_dump(*, write: bool = True) -> Path:
     return out
 
 
+def run_hybrid_state_serving_step_dump(*, write: bool = True) -> Path:
+    """Serving-step X_n dump. One runTau2Turn on the existing X. No airline improveLoop."""
+    import shutil
+    import subprocess
+
+    npx = shutil.which("npx")
+    if npx is None:
+        raise SystemExit("npx not found; install Node.js >= 18")
+    script = REPO_ROOT / "src" / "eval" / "tau2-hybrid-state-serving-step-dump.ts"
+    cmd = [npx, "--yes", "tsx", str(script)]
+    if not write:
+        cmd.append("--no-write")
+    print("[hybrid-state-serving-step-dump] " + " ".join(cmd), flush=True)
+    completed = subprocess.run(cmd, cwd=str(REPO_ROOT), check=False)
+    out = EVAL_DIR / "hybrid-state-serving-step-dump.json"
+    if completed.returncode != 0:
+        raise SystemExit(completed.returncode)
+    if write and not out.is_file():
+        raise SystemExit(f"serving-step dump did not write {out}")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.hybrid_state_serving_step_dump:
+        run_hybrid_state_serving_step_dump()
+        return 0
     if args.hybrid_state_s_dump:
         run_hybrid_state_s_dump()
         return 0

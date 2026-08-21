@@ -95,6 +95,12 @@ PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell
 # Not a score. Writes eval/tau2/hybrid-state-s-dump.json.
 npm run eval:tau2:hybrid-state-s-dump
 # or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-s-dump
+
+# Serving-step X_n dump (hole (1) after #16): licensed write, then ONE runTau2Turn
+# on that same X (H/M from the turn). Not a score. No after= on live airline improveLoop.
+# No key → mock provider still runs a real turn; live serving id is not faked.
+npm run eval:tau2:hybrid-state-serving-step-dump
+# or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-serving-step-dump
 ```
 
 `eval/tau2/latest-improve.json` records the **sequence** of rounds: `pHit` / `passHatK` / `taskPHit`, Obs, intervention, and graph diff per round. Scores are not invented. If a live slice is already 1.0 under the naive graph, the report stops after the first Obs (`stopReason: saturated`).

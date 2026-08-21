@@ -61,6 +61,8 @@ Honest I_sku mount protocol cell (same hung-44 license as the #12 reject; I_sku 
 
 X_n.S dump after that licensed write (critic hole (1) after #15). S is on the HybridState object. Not a score, not a new 0813 serve, not assembled from `servingByTask`: `hybrid-state-s-dump.json`.
 
+Serving-step X_n dump after #16 (remaining hole (1)): same HybridState the licensed write mutated, then ONE `runTau2Turn` appends that turn's messages to `X.H` and traces to `X.M`. Not a score, not a Pro-vs-Flash table, not stuffed H/M: `hybrid-state-serving-step-dump.json`.
+
 ```
 npm test
 PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell
@@ -70,6 +72,10 @@ PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell
 npm run eval:tau2:hybrid-state-s-dump
 # or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-s-dump
 # or: npx tsx src/eval/tau2-hybrid-state-s-dump.ts
+
+npm run eval:tau2:hybrid-state-serving-step-dump
+# or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-serving-step-dump
+# or: npx tsx src/eval/tau2-hybrid-state-serving-step-dump.ts
 ```
 
 Airline `reward_basis` is DB × COMMUNICATE (`communicate_info` is `[]` on 39/44), so score 0 is a DB miss. ACTION / `nl_assertions` are diagnostics only.
