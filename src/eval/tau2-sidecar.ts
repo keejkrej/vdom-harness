@@ -4,8 +4,9 @@
  *
  * Fast clock: set_technique / i_loop / turn keep answering.
  * I_sku (i_sku) is the slow arm: propose pro-0813, gate, write S
- * onto weighted episodes only (per-task map; not a process servingSku).
- * servingPaused is always false. FakeTrainer / i_weight_* are stubs.
+ * onto existing HybridState objects (X.S). servingByTask is a derived
+ * cache from X.S, not the lookup. servingPaused is always false.
+ * FakeTrainer / i_weight_* are stubs.
  */
 import { createProvider, DeterministicProvider, resolveProvider, type Message, type ToolSpec } from "../providers.js";
 import { filterGymToolCalls, runTau2Turn } from "./tau2-turn.js";
@@ -28,7 +29,7 @@ import {
   recordTrainJobGate,
   spawnTrainJob,
 } from "../trainer.js";
-import { type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
+import { type HybridState, type Tau2Obs, type Tau2Technique, type Tau2TurnResponse } from "./tau2-types.js";
 import { gateWeightMount, type GraphDiffOp } from "./tau2-improve.js";
 import {
   applyISku,
@@ -36,6 +37,16 @@ import {
   SERVING_MODEL,
   type CatalogPointer,
 } from "./tau2-weight.js";
+import {
+  createHybridStore,
+  derivedServingByTask,
+  hybridRecord,
+  hybridState,
+  installHybridState,
+  servingFromHybrid,
+  writeSOnStore,
+  type HybridStore,
+} from "./tau2-hybrid-state.js";
 import { runSelfObs } from "./tau2-self-obs.js";
 import { tau2Graph } from "./tau2-graph.js";
 import { createInterface } from "node:readline";
@@ -84,6 +95,11 @@ type SidecarReply = Tau2TurnResponse & {
   serving?: CatalogPointer;
   servingSku?: CatalogPointer;
   servingByTask?: Record<string, CatalogPointer>;
+  servingByTaskIs?: "derived cache from X.S, not the lookup";
+  X?: Record<string, HybridState>;
+  sourceOfTruth?: "X_n.S";
+  dumpIsNot?: "ping / get_state S0";
+  notAssembledFromServingByTask?: true;
   trained?: false;
   catalog?: ReturnType<typeof applyISku>;
 };
@@ -104,14 +120,14 @@ let applyScope: ApplyScope | undefined;
 /** Paper S0. New batches / resets start here. Not a leftover process sku. */
 let servingS0: CatalogPointer = catalogPointer(SERVING_MODEL);
 /**
- * Per-task S. I_sku mount writes only weighted ids. I_loop never writes.
- * Process-global servingSku is not the source of truth.
+ * Live HybridState objects. I_sku writes X.S on these.
+ * servingByTask is derived from X.S — this Map is not the lookup.
  */
-const servingByTask = new Map<string, CatalogPointer>();
+const hybridByTask: HybridStore = createHybridStore();
 
 function resetServingState(): void {
   servingS0 = catalogPointer(SERVING_MODEL);
-  servingByTask.clear();
+  hybridByTask.clear();
 }
 
 function resetApplyScope(): void {
@@ -123,18 +139,46 @@ function resetApplyScope(): void {
 }
 
 function servingForRequest(taskId?: string): CatalogPointer {
-  if (taskId && servingByTask.has(taskId)) return servingByTask.get(taskId)!;
-  return servingS0;
+  return servingFromHybrid(hybridByTask, taskId, servingS0);
 }
 
+/** Derived cache from X.S. Not the source of truth. */
 function servingByTaskRecord(): Record<string, CatalogPointer> {
-  return Object.fromEntries(servingByTask);
+  return derivedServingByTask(hybridByTask);
 }
 
-/** Per-task S pick. Omit task / omit SKU → S0, not last I_sku mount. Not a jump. */
+function hybridReply(): {
+  X: Record<string, HybridState>;
+  servingByTask: Record<string, CatalogPointer>;
+  servingByTaskIs: "derived cache from X.S, not the lookup";
+} {
+  return {
+    X: hybridRecord(hybridByTask),
+    servingByTask: servingByTaskRecord(),
+    servingByTaskIs: "derived cache from X.S, not the lookup",
+  };
+}
+
+/** Per-task S pick from X.S. Omit task / omit SKU → S0, not last I_sku mount. */
 function servingModelForRequest(taskId?: string, reqModel?: string): string {
   if (taskId) return servingForRequest(taskId).sku;
   return servingS0.sku || reqModel || SERVING_MODEL;
+}
+
+function installHybridsFromObs(obsList: Tau2Obs[]): void {
+  hybridByTask.clear();
+  for (const o of obsList) {
+    if (!o.taskId) continue;
+    installHybridState(
+      hybridByTask,
+      o.taskId,
+      hybridState({
+        E: o,
+        C: liveGraph(o.taskId),
+        S: catalogPointer(servingS0.sku),
+      }),
+    );
+  }
 }
 
 function liveGraph(taskId?: string, reqGraph?: AgentGraph): AgentGraph {
@@ -184,7 +228,7 @@ async function handle(line: string): Promise<void> {
       serving: servingS0,
       servingSku: servingS0,
       servingModel: servingS0.sku,
-      servingByTask: servingByTaskRecord(),
+      ...hybridReply(),
     });
     return;
   }
@@ -199,7 +243,21 @@ async function handle(line: string): Promise<void> {
       serving: servingS0,
       servingSku: servingS0,
       servingModel: servingS0.sku,
-      servingByTask: servingByTaskRecord(),
+      ...hybridReply(),
+    });
+    return;
+  }
+
+  if (req.op === "dump_hybrid") {
+    write({
+      op: "ok",
+      id,
+      content: "X_n.S dump from HybridState objects; not ping / get_state S0",
+      servingPaused: false,
+      sourceOfTruth: "X_n.S",
+      dumpIsNot: "ping / get_state S0",
+      notAssembledFromServingByTask: true,
+      ...hybridReply(),
     });
     return;
   }
@@ -216,7 +274,7 @@ async function handle(line: string): Promise<void> {
       serving: servingS0,
       servingSku: servingS0,
       servingModel: servingS0.sku,
-      servingByTask: servingByTaskRecord(),
+      ...hybridReply(),
     });
     return;
   }
@@ -253,6 +311,8 @@ async function handle(line: string): Promise<void> {
         currentGraph = result.graphAfter;
       }
     }
+    const obsList = Array.isArray(req.obs) ? req.obs : req.obs ? [req.obs] : [];
+    installHybridsFromObs(obsList);
     write({
       op: "ok",
       id,
@@ -269,7 +329,7 @@ async function handle(line: string): Promise<void> {
       serving: servingS0,
       servingSku: servingS0,
       servingModel: servingS0.sku,
-      servingByTask: servingByTaskRecord(),
+      ...hybridReply(),
     });
     return;
   }
@@ -285,11 +345,11 @@ async function handle(line: string): Promise<void> {
       serving: servingS0,
     });
     if (catalog.action === "mount") {
-      // C topology stays C0. Write S only onto weighted episode ids. No process sku.
+      // C topology stays C0. Write S onto existing HybridState objects only.
       graphSku = catalog.graph;
       const weighted = applyScope?.weighted ?? [];
       for (const taskId of weighted) {
-        servingByTask.set(taskId, catalog.serving);
+        writeSOnStore(hybridByTask, taskId, catalog.serving);
       }
     }
     write({
@@ -300,7 +360,7 @@ async function handle(line: string): Promise<void> {
       servingModel: catalog.servingModelId,
       serving: catalog.serving,
       servingSku: catalog.serving,
-      servingByTask: servingByTaskRecord(),
+      ...hybridReply(),
       catalog,
       trained: false,
       gate: {
@@ -399,7 +459,8 @@ async function handle(line: string): Promise<void> {
       reqTechnique: req.technique,
       currentTechnique,
     });
-    const servingModel = servingModelForRequest(req.taskId, req.model);
+    const Xn = req.taskId ? hybridByTask.get(req.taskId) : undefined;
+    const servingModel = Xn ? Xn.S.sku : servingModelForRequest(req.taskId, req.model);
     const provider =
       servingModel === "deterministic" || servingModel === "scripted" || req.model === "deterministic"
         ? new DeterministicProvider(servingModel)
@@ -445,9 +506,9 @@ async function handle(line: string): Promise<void> {
       graphEdits: result.graphEdits,
       servingPaused: false,
       servingModel,
-      serving: servingForRequest(req.taskId),
-      servingSku: servingForRequest(req.taskId),
-      servingByTask: servingByTaskRecord(),
+      serving: Xn?.S ?? servingForRequest(req.taskId),
+      servingSku: Xn?.S ?? servingForRequest(req.taskId),
+      ...hybridReply(),
     });
   } catch (err) {
     write({

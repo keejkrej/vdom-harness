@@ -124,7 +124,10 @@ export type IskuMountCellOpts = {
   mockLive?: Provider;
 };
 
-/** Same hung-44 license Obs as #12 reject / post-gate 39/44 replay. */
+/**
+ * Reconstructed hung=true/timeout fixture citing sourceEval (#12/#15).
+ * Same class as the reject/mount license Obs. Not a new 0731 timeout.
+ */
 export function hung44LicenseObs(): Tau2Obs {
   return observeTau2({
     traces: [],

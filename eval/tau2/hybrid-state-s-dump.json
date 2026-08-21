@@ -1,0 +1,118 @@
+{
+  "benchmark": "tau2-bench",
+  "kind": "hybrid-state-s-dump",
+  "not_a_sota_result": true,
+  "closedLoop": false,
+  "maxRounds": 0,
+  "domain": "airline",
+  "taskIds": [
+    "39",
+    "44"
+  ],
+  "arm44": "I_sku",
+  "license": "hung",
+  "slice": "I_sku",
+  "applyScope": {
+    "waitKept": [],
+    "looped": [
+      "39"
+    ],
+    "weighted": [
+      "44"
+    ]
+  },
+  "servingPaused": false,
+  "trained": false,
+  "notFineTuning": true,
+  "notInventedPHit0813": true,
+  "pHit0813": null,
+  "protocolCell": true,
+  "fixtureAfter": true,
+  "incompleteFixture": true,
+  "notTau2Lift": true,
+  "omitAfter": false,
+  "liveServe": false,
+  "notANew0813Serve": true,
+  "vsRejectCell": "improve-live-0731-isku-44-reject.json",
+  "vsMountCell": "improve-live-0731-isku-44-mount.json",
+  "jumped": true,
+  "jumpedIs": "S write on X_n, not a new OpenRouter ping",
+  "mounted": true,
+  "sourceOfTruth": "X_n.S",
+  "dumpIsNot": "ping / get_state S0",
+  "notAssembledFromServingByTask": true,
+  "servingByTaskIs": "derived cache from X.S, not the lookup",
+  "X_44": {
+    "H": [],
+    "M": [],
+    "E": {
+      "taskId": "44",
+      "hung": true,
+      "arm": "I_sku",
+      "termination": "timeout"
+    },
+    "C": {
+      "nModel": "deepseek/deepseek-v4-flash-0731",
+      "nodeKeys": [
+        "solve"
+      ],
+      "graphHash": "37ba3d4356cdb3f2667acd135ccb40df8675514bd9662409007f3c9180292cee"
+    },
+    "S": {
+      "sku": "deepseek/deepseek-v4-pro-0813",
+      "servingPaused": false
+    },
+    "S_on_state": true
+  },
+  "X_39": {
+    "H": [],
+    "M": [],
+    "E": {
+      "taskId": "39",
+      "hung": false,
+      "arm": "I_loop"
+    },
+    "C": {
+      "nModel": "deepseek/deepseek-v4-flash-0731",
+      "nodeKeys": [
+        "solve",
+        "policy-checklist"
+      ],
+      "graphHash": "5ac1d1455e6fce79dbdd01d8a149ed6f80c30dad724b868e293d9e72f5096d0c"
+    },
+    "S": {
+      "sku": "deepseek/deepseek-v4-flash-0731",
+      "servingPaused": false
+    },
+    "S_on_state": true
+  },
+  "C": {
+    "nModel": "deepseek/deepseek-v4-flash-0731",
+    "nModelUnchanged": true,
+    "topologyUnchanged": true,
+    "graphHashBefore": "37ba3d4356cdb3f2667acd135ccb40df8675514bd9662409007f3c9180292cee",
+    "graphHashAfter": "37ba3d4356cdb3f2667acd135ccb40df8675514bd9662409007f3c9180292cee",
+    "nodeListBefore": [
+      "solve"
+    ],
+    "nodeListAfter": [
+      "solve"
+    ],
+    "sameNodeList": true
+  },
+  "fresh39": {
+    "S": {
+      "sku": "deepseek/deepseek-v4-flash-0731",
+      "servingPaused": false
+    },
+    "inherited0813": false
+  },
+  "sourceEval": [
+    "improve-live-0731-iweight-44-hung.json",
+    "improve-live-0731-self-3944-postgate.json",
+    "airline-live-self-3944-postgate-r0.json"
+  ],
+  "hung44LicenseObs": "reconstructed hung=true/timeout fixture citing sourceEval; not a new 0731 timeout",
+  "trainerIWeight": "unimplemented; off the claim",
+  "reading": "X_n.S dump after licensed write; not a score; not a new 0813 serve"
+}

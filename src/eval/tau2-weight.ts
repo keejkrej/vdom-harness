@@ -10,7 +10,7 @@ export type { CatalogPointer, ServingSku } from "./tau2-types.js";
  * I_sku actuator: gated catalog rebind of the serving pointer S, not I_weight-as-trainer.
  * Base SKU is flash-0731 until gate=mount writes S to pro-0813.
  * The cell returns S; the controller attaches it to weighted episodes only.
- * Not a process-global servingSku. Still not a live HybridState.S dump.
+ * Not a process-global servingSku. Controller attaches the returned S to X_n.S.
  * C topology / n.model are not rewritten. servingPaused stays false.
  * Jump iff later serving model id is 0813. Not fine-tuning. No LoRA.
  */

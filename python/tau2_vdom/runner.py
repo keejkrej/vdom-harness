@@ -374,16 +374,37 @@ def control_batch(
     """Landed controller. Applies BOTH buckets; slice alone drops I_loop on mixed 39/44."""
     from tau2_vdom.improve import apply_scope_from_obs
 
-    episodes = [
-        {
+    episodes: list[dict[str, Any]] = []
+    X: dict[str, Any] = {}
+    for o in obs_list:
+        serving = {"sku": DEFAULT_MODEL, "servingPaused": False}
+        state = {
+            "H": [],
+            "M": [],
+            "E": o,
+            "C": {
+                "id": "c0",
+                "version": 1,
+                "root": {
+                    "key": "solve",
+                    "role": "solve",
+                    "objective": "",
+                    "model": DEFAULT_MODEL,
+                },
+            },
+            "S": serving,
+        }
+        ep = {
             "taskId": o.get("taskId"),
             "hung": bool(o.get("hung")),
             "arm": recommend_intervention(o, loop_exhausted=loop_exhausted),
             "license": intervention_license(o, loop_exhausted=loop_exhausted),
-            "serving": {"sku": DEFAULT_MODEL, "servingPaused": False},
+            "X": state,
+            "serving": state["S"],
         }
-        for o in obs_list
-    ]
+        episodes.append(ep)
+        if o.get("taskId"):
+            X[str(o["taskId"])] = state
     scope = apply_scope_from_obs(obs_list)
     buckets = {str(e["taskId"]): e["arm"] for e in episodes if e.get("taskId")}
     applied: list[str] = []
@@ -394,6 +415,7 @@ def control_batch(
     serving = {"sku": DEFAULT_MODEL, "servingPaused": False}
     return {
         "episodes": episodes,
+        "X": X,
         "slice": recommend_slice_intervention(obs_list, loop_exhausted=loop_exhausted),
         "buckets": buckets,
         "applied": applied,

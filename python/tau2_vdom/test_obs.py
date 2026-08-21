@@ -474,6 +474,7 @@ def test_mixed_3944_s_not_identified_with_c() -> None:
     )
     assert turn44.get("servingModel") == CATALOG_JUMP_MODEL
     assert turn44.get("servingPaused") is False
+    assert turn44.get("X", {}).get("44", {}).get("S", {}).get("sku") == CATALOG_JUMP_MODEL
     turn39 = sidecar.request(
         {
             "op": "turn",
@@ -486,6 +487,7 @@ def test_mixed_3944_s_not_identified_with_c() -> None:
     )
     assert turn39.get("servingModel") == SERVING_MODEL
     assert turn39.get("servingPaused") is False
+    assert turn39.get("X", {}).get("39", {}).get("S", {}).get("sku") == SERVING_MODEL
 
     # HybridState.S falsifier: a FRESH 39-only I_loop must not inherit process 0813.
     fresh = sidecar.request({"op": "i_loop", "obs": [obs39], "model": "deterministic"})
@@ -506,6 +508,8 @@ def test_mixed_3944_s_not_identified_with_c() -> None:
     )
     assert turn_fresh.get("servingModel") == SERVING_MODEL
     assert turn_fresh.get("servingPaused") is False
+    assert fresh.get("X", {}).get("39", {}).get("S", {}).get("sku") == SERVING_MODEL
+    assert turn_fresh.get("X", {}).get("39", {}).get("S", {}).get("sku") == SERVING_MODEL
     ping = sidecar.request({"op": "ping"})
     assert ping.get("servingModel") == SERVING_MODEL
     assert ping.get("servingSku", {}).get("sku") == SERVING_MODEL

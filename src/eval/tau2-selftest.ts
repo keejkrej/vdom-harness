@@ -60,10 +60,16 @@ import {
   completedMiss39Obs,
   hung44LicenseObs,
   ISKU_REJECT_CELL_FILE,
+  SOURCE_EVAL,
   runIskuMountCell,
   runIskuMountCellController,
   servingIdIs0813,
 } from "./tau2-isku-mount-cell.js";
+import {
+  buildHybridStateSDump,
+  HYBRID_STATE_S_DUMP_READING,
+} from "./tau2-hybrid-state-s-dump.js";
+import { sOnState } from "./tau2-hybrid-state.js";
 
 let passed = 0;
 let failed = 0;
@@ -1670,6 +1676,85 @@ async function testIskuMountCellControllerFixtureAfterNoLive(): Promise<void> {
   assertEq(servingIdIs0813(CATALOG_JUMP_MODEL), true, "0813 id is a jump predicate");
 }
 
+async function testHybridStateSDumpAfterLicensedWrite(): Promise<void> {
+  const mock0813 = new DeterministicProvider(CATALOG_JUMP_MODEL);
+  const mock0731 = new DeterministicProvider(SERVING_MODEL);
+  registerProvider(CATALOG_JUMP_MODEL, mock0813);
+  registerProvider(SERVING_MODEL, mock0731);
+  const start = tau2Graph("one-shot", SERVING_MODEL);
+  const dom = new RuntimeDOM();
+  dom.reconcile(start);
+
+  const obs44 = hung44LicenseObs();
+  const obs39 = completedMiss39Obs();
+  assertEq(obs44.hung, true, "hung44LicenseObs is reconstructed hung=true");
+  assertEq(obs44.termination, "timeout", "hung44LicenseObs termination=timeout");
+  assertEq(obs44.arm, "I_sku", "44 I_sku");
+  assert(SOURCE_EVAL.length > 0, "cites sourceEval; not a new 0731 timeout");
+
+  const { ctrl } = runIskuMountCellController({ provider: mock0813, dom });
+  const X_44 = ctrl.X["44"];
+  const X_39 = ctrl.X["39"];
+  assert(X_44 !== undefined, "controller installed X_44");
+  assert(X_39 !== undefined, "controller installed X_39");
+  assert(sOnState(X_44), "S is an own field on X_44");
+  assert(sOnState(X_39), "S is an own field on X_39");
+  assert(X_44 === ctrl.episodes[1]?.X, "X_44 is the episode HybridState, not a later assembly");
+  assert(X_39 === ctrl.episodes[0]?.X, "X_39 is the episode HybridState, not a later assembly");
+  assertEq(X_44.S.sku, CATALOG_JUMP_MODEL, "X_44.S.sku is 0813");
+  assertEq(X_44.S.servingPaused, false, "X_44.S.servingPaused=false");
+  assertEq(X_39.S.sku, SERVING_MODEL, "X_39.S.sku is 0731");
+  assertEq(X_39.S.servingPaused, false, "X_39.S.servingPaused=false");
+  assertEq(findNode(X_44.C, "solve")?.model, SERVING_MODEL, "X_44.C n.model stays 0731");
+  assertEq(findNode(X_39.C, "solve")?.model, SERVING_MODEL, "X_39.C n.model stays 0731");
+  assertEq(findNode(ctrl.graphC0!, "solve")?.model, SERVING_MODEL, "C n.model stays 0731");
+  assert(sameCTopology(ctrl.graphSku ?? start, start), "C topology stays");
+  assertEq(
+    dom.current.get("solve")?.provider?.model,
+    SERVING_MODEL,
+    "no PhysicalNode.provider spray",
+  );
+  const p39 = servingProviderForTask(ctrl, "39", mock0731, dom);
+  const p44 = servingProviderForTask(ctrl, "44", mock0731, dom);
+  assertEq(p39.model, SERVING_MODEL, "mixed later serving 39 typed by X.S is 0731");
+  assertEq(p44.model, CATALOG_JUMP_MODEL, "mixed later serving 44 typed by X.S is 0813");
+  assertEq(servingModelForTask(ctrl, "44"), X_44.S.sku, "lookup reads X.S, not servingByTask");
+  assertEq(servingModelForTask(ctrl, "39"), X_39.S.sku, "lookup reads X_39.S");
+
+  const { dump, X_44: dump44, X_39: dump39 } = buildHybridStateSDump({ ctrl });
+  assert(dump44 === X_44, "dump serializes the live X_44 object, not a servingByTask rebuild");
+  assert(dump39 === X_39, "dump serializes the live X_39 object");
+  assertEq(dump.X_44.S.sku, CATALOG_JUMP_MODEL, "dump X_44.S.sku=0813");
+  assertEq(dump.X_44.S.servingPaused, false, "dump X_44.S.servingPaused=false");
+  assertEq(dump.X_39.S.sku, SERVING_MODEL, "dump X_39.S.sku=0731");
+  assertEq(dump.X_39.S.servingPaused, false, "dump X_39.S.servingPaused=false");
+  assertEq(dump.X_44.S_on_state, true, "landed log shows S on the state object");
+  assertEq(dump.pHit0813, null, "does not invent p_hit(0813)");
+  assertEq(dump.notInventedPHit0813, true, "notInventedPHit0813");
+  assertEq(dump.protocolCell, true, "protocolCell");
+  assertEq(dump.liveServe, false, "no new 0813 serve");
+  assertEq(dump.jumped, true, "jumped is the S write");
+  assertEq(dump.jumpedIs, "S write on X_n, not a new OpenRouter ping", "jumped is not a ping");
+  assertEq(dump.C.nModel, SERVING_MODEL, "dump C n.model stays 0731");
+  assertEq(dump.C.nModelUnchanged, true, "n.model unchanged");
+  assertEq(dump.C.topologyUnchanged, true, "C topology unchanged");
+  assertEq(dump.C.sameNodeList, true, "same node list before vs after");
+  assertEq(dump.C.graphHashBefore, dump.C.graphHashAfter, "graph hash unchanged");
+  assertEq(dump.fresh39.S.sku, SERVING_MODEL, "fresh 39-only X.S is 0731");
+  assertEq(dump.fresh39.inherited0813, false, "fresh batch does not inherit 0813");
+  assertEq(dump.reading, HYBRID_STATE_S_DUMP_READING, "reading is the X_n.S dump sentence");
+  assertEq(dump.dumpIsNot, "ping / get_state S0", "dump is not ping/get_state");
+  assertEq(dump.notAssembledFromServingByTask, true, "not assembled from servingByTask");
+  assertEq(dump.servingPaused, false, "serving unpaused");
+  assertEq(dump.trained, false, "trainer I_weight stays off");
+  assertEq(dump.fixtureAfter, true, "fixture after stays labeled");
+
+  const fresh = controlBatch([completedMiss39Obs()], { graph: start, dom });
+  assert(sOnState(fresh.X["39"]), "fresh X_39 has own S");
+  assertEq(fresh.X["39"]?.S.sku, SERVING_MODEL, "fresh 39-only X_n.S is 0731");
+  assertEq(fresh.episodes[0]?.X.S.sku, SERVING_MODEL, "fresh episode X.S is 0731");
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -1710,6 +1795,7 @@ async function main(): Promise<void> {
     ["mixed 39/44 later serving typed by S, not sprayed provider", testMixed3944LaterServingTypedByS],
     ["fresh 39-only batch does not inherit process servingSku=0813", testFreshBatchDoesNotInheritProcessServingSku],
     ["I_sku mount-cell controller: fixture after, no live, 44=0813 39=0731 no spray", testIskuMountCellControllerFixtureAfterNoLive],
+    ["X_n.S dump after licensed write: HybridState.S on the state object", testHybridStateSDumpAfterLicensedWrite],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {
