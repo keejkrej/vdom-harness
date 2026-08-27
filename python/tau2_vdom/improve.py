@@ -94,6 +94,7 @@ I_CATALOG_NOTE = I_SKU_NOTE
 LIVE_HANG_OBS_ISKU_FILE = "improve-live-0731-hang-obs-isku.json"
 LIVE_HANG_OBS_ISKU_R6_FILE = "improve-live-0731-hang-obs-isku-r6.json"
 LIVE_HANG_OBS_ISKU_39_FILE = "improve-live-0731-hang-obs-isku-39.json"
+LIVE_HANG_OBS_ISKU_41_FILE = "improve-live-0731-hang-obs-isku-41.json"
 LIVE_HANG_OBS_ISKU_TASK_DEFAULT = "44"
 FORBIDDEN_HANG_SOURCES = (
     "improve-live-0731-iweight-44-hung.json",
@@ -1744,6 +1745,16 @@ def write_live_hang_obs_isku(report: dict[str, Any], path: Path | None = None) -
         raise ValueError(
             "live hang-obs-isku refused to overwrite r6; "
             "task 44 still writes the historical improve-live-0731-hang-obs-isku.json"
+        )
+    if out.name == LIVE_HANG_OBS_ISKU_39_FILE and task_id != "39":
+        raise ValueError(
+            "live hang-obs-isku refused to overwrite landed 39; "
+            f"TASK_ID={task_id} writes {live_hang_obs_isku_filename(task_id)}"
+        )
+    if out.name == LIVE_HANG_OBS_ISKU_41_FILE and task_id != "41":
+        raise ValueError(
+            "live hang-obs-isku refused to overwrite landed 41; "
+            f"TASK_ID={task_id} writes {live_hang_obs_isku_filename(task_id)}"
         )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")

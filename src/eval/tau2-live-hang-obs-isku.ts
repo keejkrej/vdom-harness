@@ -23,6 +23,7 @@ import { type Tau2Obs } from "./tau2-types.js";
 export const LIVE_HANG_OBS_ISKU_FILE = "improve-live-0731-hang-obs-isku.json";
 export const LIVE_HANG_OBS_ISKU_R6_FILE = "improve-live-0731-hang-obs-isku-r6.json";
 export const LIVE_HANG_OBS_ISKU_39_FILE = "improve-live-0731-hang-obs-isku-39.json";
+export const LIVE_HANG_OBS_ISKU_41_FILE = "improve-live-0731-hang-obs-isku-41.json";
 export const LIVE_HANG_OBS_ISKU_TASK_DEFAULT = "44";
 
 export const FORBIDDEN_HANG_SOURCES = [
@@ -448,6 +449,10 @@ export function liveHangObsIskuR6EvalPath(repoRoot?: string): string {
 
 export function liveHangObsIsku39EvalPath(repoRoot?: string): string {
   return liveHangObsIskuEvalPath(repoRoot, "39");
+}
+
+export function liveHangObsIsku41EvalPath(repoRoot?: string): string {
+  return liveHangObsIskuEvalPath(repoRoot, "41");
 }
 
 export function writeLiveHangObsIsku(report: LiveHangObsIskuReport, path?: string): string {
