@@ -15,6 +15,7 @@ from tau2_vdom.improve import (
     I_WEIGHT_NOTE,
     INCOMPLETE_FIXTURE_ID,
     LIVE_HANG_OBS_ISKU_39_FILE,
+    LIVE_HANG_OBS_ISKU_18_FILE,
     LIVE_HANG_OBS_ISKU_41_FILE,
     LIVE_HANG_OBS_ISKU_FILE,
     LIVE_HANG_OBS_ISKU_R6_FILE,
@@ -524,10 +525,12 @@ def test_live_hang_obs_isku_task_id_writes_new_file() -> None:
     r6 = EVAL_DIR / LIVE_HANG_OBS_ISKU_R6_FILE
     landed39 = EVAL_DIR / LIVE_HANG_OBS_ISKU_39_FILE
     landed41 = EVAL_DIR / LIVE_HANG_OBS_ISKU_41_FILE
+    landed18 = EVAL_DIR / LIVE_HANG_OBS_ISKU_18_FILE
     first_before = first.read_bytes()
     r6_before = r6.read_bytes()
     landed39_before = landed39.read_bytes()
     landed41_before = landed41.read_bytes()
+    landed18_before = landed18.read_bytes()
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp) / "improve-live-0731-hang-obs-isku-39.json"
         out = run_live_hang_obs_isku(write=True, task_id="39", out_path=dest)
@@ -545,6 +548,7 @@ def test_live_hang_obs_isku_task_id_writes_new_file() -> None:
         assert r6.read_bytes() == r6_before
         assert landed39.read_bytes() == landed39_before
         assert landed41.read_bytes() == landed41_before
+        assert landed18.read_bytes() == landed18_before
         try:
             write_live_hang_obs_isku(report, first)
         except ValueError as exc:
@@ -555,6 +559,7 @@ def test_live_hang_obs_isku_task_id_writes_new_file() -> None:
     assert r6.read_bytes() == r6_before
     assert landed39.read_bytes() == landed39_before
     assert landed41.read_bytes() == landed41_before
+    assert landed18.read_bytes() == landed18_before
 
 
 def test_live_hang_obs_isku_builders_are_task_generic() -> None:
@@ -684,6 +689,55 @@ def test_landed_41_no_hang_does_not_overwrite_prior_packets() -> None:
         assert name not in blob
 
 
+
+def test_landed_18_no_hang_does_not_overwrite_prior_packets() -> None:
+    first = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_FILE).read_text())
+    r6 = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_R6_FILE).read_text())
+    landed39 = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_39_FILE).read_text())
+    landed41 = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_41_FILE).read_text())
+    landed = json.loads((EVAL_DIR / LIVE_HANG_OBS_ISKU_18_FILE).read_text())
+    assert first["hung"] is False
+    assert first["obs"]["taskId"] == "44"
+    assert first["holeOpen"] is True
+    assert r6["hung"] is True
+    assert r6["obs"]["taskId"] == "44"
+    assert r6["obs"]["termination"] == "timeout"
+    assert landed39["taskIds"] == ["39"]
+    assert landed39["hung"] is False
+    assert landed41["taskIds"] == ["41"]
+    assert landed41["hung"] is False
+    assert_live_hang_obs_isku_cell(landed)
+    assert landed["pendingKey"] is False
+    assert landed["controllerReplay"] is False
+    assert landed["freshHang"] is False
+    assert landed["hung"] is False
+    assert landed["holeOpen"] is True
+    assert landed["taskIds"] == ["18"]
+    assert landed["obs"]["taskId"] == "18"
+    assert landed["obs"]["arm"] == "wait"
+    assert landed["obs"]["hung"] is False
+    assert landed["obs"]["termination"] == "user_stop"
+    assert landed["obs"]["nSuccessProxy"] == 1
+    assert landed["applyScope"]["waitKept"] == ["18"]
+    assert landed["arm"] is None
+    assert landed["iSkuRequest"] is None
+    assert landed["gate"]["action"] is None
+    assert landed["gate"]["after"] is None
+    assert landed["omitAfter"] is True
+    assert landed["jumped"] is False
+    assert landed["servingPaused"] is False
+    assert landed["servingModelAfter"] == SERVING_MODEL
+    assert landed["pHit0813"] is None
+    assert landed["sourceEval"][0] == LIVE_HANG_OBS_ISKU_18_FILE
+    assert any("airline-live-one-shot-r1787818127-20260827T080847Z.json" in s for s in landed["sourceEval"])
+    assert "hole remains open" in landed["reading"]
+    assert "hung-first Obs chose I_sku" not in landed["reading"]
+    assert "not a new timeout" not in landed["reading"]
+    blob = json.dumps(landed)
+    for name in FORBIDDEN_HANG_SOURCES:
+        assert name not in blob
+
+
 def test_weight_fixture_writes_report() -> None:
     path = run_weight_fixture_improve()
     latest = EVAL_DIR / "latest-improve.json"
@@ -728,6 +782,7 @@ def main() -> int:
         test_live_hang_obs_isku_builders_are_task_generic,
         test_landed_39_no_hang_does_not_overwrite_44_packets,
         test_landed_41_no_hang_does_not_overwrite_prior_packets,
+        test_landed_18_no_hang_does_not_overwrite_prior_packets,
         test_weight_fixture_writes_report,
     ]
     failed = 0

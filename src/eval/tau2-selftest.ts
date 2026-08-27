@@ -106,12 +106,14 @@ import {
   FORBIDDEN_HANG_SOURCES,
   GATE_OMIT_AFTER_REASON,
   LIVE_HANG_OBS_ISKU_39_FILE,
+  LIVE_HANG_OBS_ISKU_18_FILE,
   LIVE_HANG_OBS_ISKU_41_FILE,
   LIVE_HANG_OBS_ISKU_FILE,
   LIVE_HANG_OBS_ISKU_R6_FILE,
   LIVE_HANG_OBS_ISKU_READING,
   LIVE_HANG_OBS_ISKU_TASK_DEFAULT,
   liveHangObsIsku39EvalPath,
+  liveHangObsIsku18EvalPath,
   liveHangObsIsku41EvalPath,
   liveHangObsIskuEvalPath,
   liveHangObsIskuFilename,
@@ -2654,6 +2656,58 @@ async function testLanded41NoHangDoesNotOverwritePriorPackets(): Promise<void> {
   }
 }
 
+
+async function testLanded18NoHangDoesNotOverwritePriorPackets(): Promise<void> {
+  const first = readLiveHangObsIsku(liveHangObsIskuEvalPath());
+  const r6 = readLiveHangObsIsku(liveHangObsIskuR6EvalPath());
+  const landed39 = readLiveHangObsIsku(liveHangObsIsku39EvalPath());
+  const landed41 = readLiveHangObsIsku(liveHangObsIsku41EvalPath());
+  const landed = readLiveHangObsIsku(liveHangObsIsku18EvalPath());
+  assertEq(first.hung, false, "1c3528c hung=false stays");
+  assertEq(first.obs.taskId, "44", "1c3528c stays task 44");
+  assertEq(r6.hung, true, "r6 hung=true stays");
+  assertEq(r6.obs.taskId, "44", "r6 stays task 44");
+  assertEq(r6.obs.termination, "timeout", "r6 timeout stays");
+  assertEq(landed39.taskIds[0], "39", "39 packet stays");
+  assertEq(landed39.hung, false, "39 hung=false stays");
+  assertEq(landed41.taskIds[0], "41", "41 packet stays");
+  assertEq(landed41.hung, false, "41 hung=false stays");
+  assertEq(landed.kind, "live-closed-loop-obs", "18 is the live Obs cell");
+  assertEq(landed.pendingKey, false, "18 is measured");
+  assertEq(landed.controllerReplay, false, "18 is not a replay");
+  assertEq(landed.freshHang, false, "18 did not hang");
+  assertEq(landed.hung, false, "18 hung=false");
+  assertEq(landed.holeOpen, true, "18 hole remains open");
+  assertEq(landed.taskIds[0], "18", "18 taskIds");
+  assertEq(landed.obs.taskId, "18", "18 obs.taskId");
+  assertEq(landed.obs.arm, "wait", "18 obs.arm is wait");
+  assertEq(landed.obs.hung, false, "18 obs.hung is false");
+  assertEq(landed.obs.termination, "user_stop", "18 user_stop");
+  assertEq(landed.obs.nSuccessProxy, 1, "18 nSuccessProxy is 1");
+  assertEq(JSON.stringify(landed.applyScope.waitKept), JSON.stringify(["18"]), "18 waitKept");
+  assertEq(landed.arm ?? null, null, "I_sku not licensed");
+  assertEq(landed.iSkuRequest, null, "I_sku request did not fire");
+  assertEq(landed.gate.action, null, "gate action null");
+  assertEq(landed.gate.after, null, "gate.after=null");
+  assertEq(landed.omitAfter, true, "omit after=");
+  assertEq(landed.jumped, false, "jumped=false");
+  assertEq(landed.servingPaused, false, "servingPaused=false");
+  assertEq(landed.servingModelAfter, SERVING_MODEL, "serving stays 0731");
+  assertEq(landed.pHit0813, null, "does not invent p_hit(0813)");
+  assertEq(landed.sourceEval[0], LIVE_HANG_OBS_ISKU_18_FILE, "18 sourceEval is this file");
+  assert(
+    landed.sourceEval.some((s) => s.includes("airline-live-one-shot-r1787818127-20260827T080847Z.json")),
+    "18 cites the measured one-shot, not invented onto the PR",
+  );
+  assert(landed.reading.includes("hole remains open"), "18 reading keeps the hole open");
+  assert(!landed.reading.includes("hung-first Obs chose I_sku"), "18 does not claim a hang");
+  assert(!landed.reading.includes("not a new timeout"), "18 is not #12's phrase");
+  const blob = JSON.stringify(landed);
+  for (const name of FORBIDDEN_HANG_SOURCES) {
+    assert(!blob.includes(name), `18 is not ${name} stuffed through Obs`);
+  }
+}
+
 async function testWordReverseUntouched(): Promise<void> {
   const p = new DeterministicProvider();
   const out = await p.complete([
@@ -2710,6 +2764,7 @@ async function main(): Promise<void> {
     ["live hang-obs-isku TASK_ID 39 writes a new file", testLiveHangObsIskuTaskIdWritesNewFile],
     ["landed 39 no-hang does not overwrite 44 packets", testLanded39NoHangDoesNotOverwrite44Packets],
     ["landed 41 wait/hit does not overwrite prior packets", testLanded41NoHangDoesNotOverwritePriorPackets],
+    ["landed 18 wait/hit does not overwrite prior packets", testLanded18NoHangDoesNotOverwritePriorPackets],
     ["DeterministicProvider word-reverse intact", testWordReverseUntouched],
   ];
   for (const [name, fn] of tests) {
