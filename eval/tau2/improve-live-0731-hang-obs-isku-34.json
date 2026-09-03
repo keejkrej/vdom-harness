@@ -5,7 +5,7 @@
   "closedLoop": false,
   "domain": "airline",
   "taskIds": [
-    "32"
+    "34"
   ],
   "numTrials": 1,
   "model": "deepseek/deepseek-v4-flash-0731",
@@ -17,17 +17,17 @@
   "pendingKey": false,
   "arm": null,
   "obs": {
-    "arm": "I_loop",
+    "arm": "wait",
     "hung": false,
-    "taskId": "32",
+    "taskId": "34",
     "termination": "user_stop",
-    "nSuccessProxy": 0
+    "nSuccessProxy": 1
   },
   "applyScope": {
-    "waitKept": [],
-    "looped": [
-      "32"
+    "waitKept": [
+      "34"
     ],
+    "looped": [],
     "weighted": []
   },
   "omitAfter": true,
@@ -48,8 +48,8 @@
     "reason": "episode completed; I_sku not licensed; after omitted; hole remains open"
   },
   "sourceEval": [
-    "improve-live-0731-hang-obs-isku-32.json",
-    "eval/tau2/airline-live-one-shot-r1787866129-20260827T212849Z.json"
+    "improve-live-0731-hang-obs-isku-34.json",
+    "eval/tau2/airline-live-one-shot-r1788449039-20260903T152359Z.json"
   ],
   "sourceEvalIs": "this run",
   "vsRejectCell": "improve-live-0731-isku-44-reject.json",
