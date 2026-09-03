@@ -4,9 +4,7 @@
   "not_a_sota_result": true,
   "closedLoop": false,
   "domain": "airline",
-  "taskIds": [
-    "32"
-  ],
+  "taskIds": ["32"],
   "numTrials": 1,
   "model": "deepseek/deepseek-v4-flash-0731",
   "live": true,
@@ -25,9 +23,7 @@
   },
   "applyScope": {
     "waitKept": [],
-    "looped": [
-      "32"
-    ],
+    "looped": ["32"],
     "weighted": []
   },
   "omitAfter": true,
