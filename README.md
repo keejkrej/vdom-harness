@@ -104,6 +104,12 @@ npm run eval:tau2:hybrid-state-s-dump
 # real turn; live serving id is not faked.
 npm run eval:tau2:hybrid-state-serving-step-dump
 # or: PYTHONPATH=python python3 -m tau2_vdom.improve --hybrid-state-serving-step-dump
+
+# Live closed-loop Obs of a FRESH 0731 hang → I_sku (omit after=).
+# Not #12's controller replay of saved hung-44. Not a score. Not a dump.
+# Needs OPENROUTER_API_KEY; without it the JSON is pending (no hang faked).
+npm run eval:tau2:live-hang-obs-isku
+# or: PYTHONPATH=python python3 -m tau2_vdom.improve --live-hang-obs-isku
 ```
 
 `eval/tau2/latest-improve.json` records the **sequence** of rounds: `pHit` / `passHatK` / `taskPHit`, Obs, intervention, and graph diff per round. Scores are not invented. If a live slice is already 1.0 under the naive graph, the report stops after the first Obs (`stopReason: saturated`).

@@ -1,0 +1,53 @@
+{
+  "benchmark": "tau2-bench",
+  "kind": "live-closed-loop-obs",
+  "not_a_sota_result": true,
+  "closedLoop": true,
+  "domain": "airline",
+  "taskIds": ["44"],
+  "numTrials": 1,
+  "model": "deepseek/deepseek-v4-flash-0731",
+  "live": true,
+  "controllerReplay": false,
+  "freshHang": true,
+  "hung": true,
+  "holeOpen": false,
+  "pendingKey": false,
+  "obs": {
+    "arm": "I_sku",
+    "hung": true,
+    "taskId": "44",
+    "termination": "timeout",
+    "nSuccessProxy": 0
+  },
+  "applyScope": {
+    "waitKept": [],
+    "looped": [],
+    "weighted": ["44"]
+  },
+  "omitAfter": true,
+  "iSkuRequestOmitsAfter": true,
+  "iSkuRequest": {"op": "i_sku", "before": 0},
+  "jumped": false,
+  "servingPaused": false,
+  "servingModelAfter": "deepseek/deepseek-v4-flash-0731",
+  "proposedModel": "deepseek/deepseek-v4-pro-0813",
+  "pHit0813": null,
+  "notInventedPHit0813": true,
+  "trained": false,
+  "trainerOff": true,
+  "liveAirlineImproveLoopOmitsAfter": true,
+  "gate": {
+    "action": "reject",
+    "after": null,
+    "before": 0,
+    "reason": "no measured after-eval; 0813 existing is not a gate"
+  },
+  "sourceEval": [
+    "improve-live-0731-hang-obs-isku.json",
+    "eval/tau2/airline-live-one-shot-r1787317913-20260821T131153Z.json"
+  ],
+  "sourceEvalIs": "this run",
+  "vsRejectCell": "improve-live-0731-isku-44-reject.json",
+  "reading": "live Obs of this episode; hung-first Obs chose I_sku; omit after; gate rejected; serving stayed 0731; not a controller replay of saved hung-44; not a score; not a dump; not live hung-44 then served as a mount."
+}

@@ -16,6 +16,7 @@
     "eval:tau2:isku-mount-cell": "PYTHONPATH=python python3 -m tau2_vdom.improve --isku-mount-cell",
     "eval:tau2:hybrid-state-s-dump": "npx tsx src/eval/tau2-hybrid-state-s-dump.ts",
     "eval:tau2:hybrid-state-serving-step-dump": "npx tsx src/eval/tau2-hybrid-state-serving-step-dump.ts",
+    "eval:tau2:live-hang-obs-isku": "PYTHONPATH=python python3 -m tau2_vdom.improve --live-hang-obs-isku",
     "eval:tau2:obs": "PYTHONPATH=python python3 -m tau2_vdom.test_obs && PYTHONPATH=python python3 -m tau2_vdom.test_weight"
   },
   "engines": {
