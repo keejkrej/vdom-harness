@@ -93,7 +93,7 @@ function build(dir: string): void {
 }
 
 /** Stable launchers so clients (T3, editors, scripts) always start prod. */
-function writeShims(prodPath: string): string {
+export function writeShims(prodPath: string): string {
   const bin = join(vdomHome(), "bin");
   mkdirSync(bin, { recursive: true });
   const cli = join(prodPath, "dist", "acp", "cli.js");
@@ -134,22 +134,16 @@ function launcherSource(cli: string): string {
     "  if (cur) out.push(cur);",
     "  return out;",
     "}",
-    "// The raw line starts with the shell and the batch path; drop everything up",
-    "// to and including the vdom.cmd entry, which keeps the quoted multi-line",
-    "// prompt intact.",
-    "const parts = splitArgs(raw);",
-    "// The raw line may wrap the batch and its arguments in outer quotes:",
-    "// `cmd /c \"\"<vdom.cmd>\" <args>\"` (PowerShell) or `cmd /d /s /c \"<vdom.cmd> <args>\"`.",
-    "// Unwrap that outer quoting before splitting so the batch path and the",
-    "// quoted multi-line prompt survive as single arguments.",
-    "let line = raw;",
-    "const dbl = /\\s[\\/]c\\s+\"\"([\\s\\S]*)\"\\s*$/.exec(line);",
-    "const sgl = /\\s[\\/]c\\s+\"([\\s\\S]*)\"\\s*$/.exec(line);",
-    "if (dbl) line = dbl[1];",
-    "else if (sgl) line = sgl[1];",
-    "const parts = splitArgs(line);",
+    "// The raw command line is '<shell> ... /c <command>' (or /k). Recover the",
+    "// <command>, apply cmd's own outer-quote rule (strip the first and last",
+    "// quote when it starts with one), then split; the quoted multi-line prompt",
+    "// survives as a single argument. If anything looks off, fall back to argv.",
+    "const cm = /\\s\\/[ck]\\s+([\\s\\S]*)$/.exec(raw);",
+    "let tail = cm ? cm[1] : raw;",
+    "if (tail.startsWith('\"') && tail.endsWith('\"') && tail.length > 1) tail = tail.slice(1, -1);",
+    "const parts = splitArgs(tail);",
     "const batchIdx = parts.findIndex((p) => /vdom[.]cmd$/i.test(p));",
-    "const recovered = batchIdx >= 0 ? parts.slice(batchIdx + 1) : process.argv.slice(2);",,
+    "const recovered = batchIdx >= 0 ? parts.slice(batchIdx + 1) : process.argv.slice(2);",
     "const r = spawnSync(process.execPath, [cli, ...recovered], { stdio: 'inherit', windowsHide: true });",
     "if (r.error) { console.error(String(r.error)); process.exit(1); }",
     "process.exit(r.status ?? 0);",

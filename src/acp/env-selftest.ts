@@ -69,29 +69,29 @@ console.log("ok env init (prod worktree + shim)");
 // 0. The shim must pass a multi-line prompt argument through verbatim.
 // Regression (I-20261002-ea84): cmd.exe re-parses `%*` and cuts an argument at
 // the first newline, so a two-line prompt reached the agent as its first line
-// only. Run the shim with a multi-line prompt and check what the CLI received.
+// only. Drivers invoke the shim the properly-quoted way — cmd.exe /c with the
+// prompt as one quoted argv element — so test that shape.
 {
   const brief = "Line one: build the router.\nLine two: keep the ladder cheap-first.";
-  const r = spawnSync(shim, ["client", "--cwd", repo, "-p", brief], {
-    encoding: "utf8",
-    ...(process.platform === "win32" ? { shell: true } : {}),
-  });
+  const r =
+    process.platform === "win32"
+      ? spawnSync("cmd", ["/c", shim, "client", "--cwd", repo, "-p", brief], { encoding: "utf8" })
+      : spawnSync(shim, ["client", "--cwd", repo, "-p", brief], { encoding: "utf8" });
   assert.equal(r.status, 0, `shim run failed: ${r.stdout}\n${r.stderr}`);
   const received = JSON.parse(r.stdout.trim()) as string[];
   assert.equal(received.at(-1), brief, `the multi-line prompt must survive the shim verbatim, got: ${JSON.stringify(received)}`);
   console.log("ok shim passes multi-line prompt arguments verbatim");
 }
 
-// 0b. `--prompt-file` (and `-` for stdin) keep newlines regardless of the shell.
+// 0b. `--prompt-file` (and `-` for stdin) keep newlines regardless of the shell:
+// the escape hatch for callers that cannot quote a multi-line argument.
 {
   const briefFile = join(home, "brief.txt");
   writeFileSync(briefFile, "From the file: route by cost.\nSecond line.\n");
   const run = (args: string[], input?: string) =>
-    spawnSync(shim, args, {
-      encoding: "utf8",
-      ...(input !== undefined ? { input } : {}),
-      ...(process.platform === "win32" ? { shell: true } : {}),
-    });
+    process.platform === "win32"
+      ? spawnSync("cmd", ["/c", shim, ...args], { encoding: "utf8", ...(input !== undefined ? { input } : {}) })
+      : spawnSync(shim, args, { encoding: "utf8", ...(input !== undefined ? { input } : {}) });
   const r = run(["client", "--cwd", repo, "--prompt-file", briefFile]);
   assert.equal(r.status, 0, `prompt-file run failed: ${r.stdout}\n${r.stderr}`);
   assert.match((JSON.parse(r.stdout.trim()) as string[]).at(-1)!, /From the file: route by cost\.\nSecond line\./, "file-sourced prompt keeps its newlines");
