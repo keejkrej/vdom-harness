@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Readable, Writable } from "node:stream";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -9,11 +9,12 @@ import {
   type Client,
   type Stream,
 } from "@agentclientprotocol/sdk";
-import { loadConfig, type AgentConfig } from "./config.js";
+import { loadConfig, vdomHome, type AgentConfig } from "./config.js";
 import { parseArgs, splitCommand, type Parsed } from "./cli-args.js";
 import { drive, spawnAgent, type DriveOptions } from "./client.js";
 import { AGENT_VERSION, VdomAgent } from "./agent.js";
 import { listModels, streamChat } from "./llm.js";
+import { ModelRouter, describeStats } from "./routing.js";
 import { SessionStore } from "./store.js";
 import { fixIssue } from "./fix.js";
 import { analyze, readEvents, renderMarkdown } from "./history.js";
@@ -177,6 +178,7 @@ Slash commands (send as the prompt): /compact [focus], /reload, /skill:<name> [a
 
 Options:
   --model <id>          Default model
+  --ladder <a,b,c>      Adaptive routing: cheap-first model ladder, strongest last
   --base-url <url>      OpenAI-compatible endpoint (alias: -e, --endpoint)
   --cwd <dir>           Working directory for \`run\`
   --force               Never ask for permission (aliases: --yolo, --always-approve)
@@ -185,6 +187,7 @@ Options:
 Environment:
   OLLAMA_API_KEY        → https://ollama.com/v1 (Ollama Cloud)
   VDOM_BASE_URL / VDOM_API_KEY / VDOM_MODEL / VDOM_MODELS
+  VDOM_ROUTE_LADDER     comma-separated cheap-first model ladder (VDOM_ROUTING=off disables)
   OPENROUTER_API_KEY, OPENAI_API_KEY (+ OPENAI_BASE_URL)
 `;
 
@@ -278,6 +281,7 @@ async function doctor(cfg: AgentConfig): Promise<number> {
       `shell      ${cfg.shell}`,
       `sessions   ${cfg.dataDir}`,
       `fullAccess ${cfg.fullAccess}`,
+      ...(cfg.routeLadder.length ? [`ladder     ${cfg.routeLadder.join(" → ")}`] : []),
       "",
     ].join("\n"),
   );
@@ -291,11 +295,12 @@ async function doctor(cfg: AgentConfig): Promise<number> {
       messages: [{ role: "user", content: "Reply with exactly: ok" }],
     });
     process.stdout.write(`completion ok (${r.model ?? cfg.model}): ${JSON.stringify(r.content.trim().slice(0, 40))}\n`);
-    return 0;
   } catch (err) {
     process.stdout.write(`completion FAILED: ${err instanceof Error ? err.message : String(err)}\n`);
-    return 1;
   }
+  // Persisted routing stats: what the ladder has been doing across sessions.
+  if (cfg.routeLadder.length) process.stdout.write(`${describeStats(new ModelRouter(cfg.routeLadder, join(vdomHome(), "routing")).snapshot())}\n`);
+  return 0;
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number | undefined> {

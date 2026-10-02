@@ -10,6 +10,7 @@ import { resolveToolAlias, TOOLS_BY_NAME, truncateHead, truncateTail, unsupporte
 import type { ChatMessage } from "./llm.js";
 import { detectFeedback } from "./feedback.js";
 import { parseInterpretation } from "./sentiment.js";
+import { ModelRouter, parseLadder, bucketKey, classifyRequest, describeStats, isHarnessCheckout } from "./routing.js";
 import { parseJsonObject } from "./agent.js";
 import { analyze, EventLog, readEvents, renderMarkdown } from "./history.js";
 
@@ -245,6 +246,172 @@ console.log("ok templates");
   assert.equal(f[0]!.severity, "high");
   assert.match(f[0]!.message, /4 times/);
   console.log("ok repeated unknown tool grouped");
+}
+
+// ---- adaptive routing: cheap-first, at most one step up per turn, position persists
+{
+  const stats = mkdtempSync(join(tmpdir(), "vdom-routing-"));
+  const r = new ModelRouter(["cheap", "mid", "big"], stats);
+  const st = r.newState();
+  assert.equal(st.active, true);
+  assert.equal(r.current(st), "cheap", "sessions start on the cheapest rung");
+  r.beginTurn(st);
+  assert.equal(r.escalate(st, "llm_error")?.to, "mid");
+  assert.equal(r.escalate(st, "empty_response"), undefined, "at most one step up per turn");
+  assert.equal(r.current(st), "mid", "position persists within the session");
+  r.beginTurn(st);
+  assert.equal(r.current(st), "mid", "a new turn keeps the earned position");
+  assert.equal(r.escalate(st, "tool_errors")?.to, "big");
+  r.beginTurn(st);
+  assert.equal(r.escalate(st, "llm_error"), undefined, "no step up from the top rung");
+  // Tool failures accumulate within a turn, reset after a step, reset each turn.
+  const st2 = r.newState();
+  r.observeToolStatus(st2, "error");
+  r.observeToolStatus(st2, "ok");
+  r.observeToolStatus(st2, "denied");
+  assert.equal(r.maybeEscalateFromTools(st2), undefined, "two failures are not enough");
+  r.observeToolStatus(st2, "error");
+  assert.equal(r.maybeEscalateFromTools(st2)?.reason, "tool_errors");
+  assert.equal(st2.position, 1);
+  r.observeToolStatus(st2, "error");
+  r.observeToolStatus(st2, "error");
+  r.observeToolStatus(st2, "error");
+  assert.equal(r.maybeEscalateFromTools(st2), undefined, "no second step up in the same turn");
+  r.beginTurn(st2);
+  assert.equal(st2.toolErrors, 0, "tool failures reset each turn");
+  // Stats persist across processes (the learning signal).
+  r.recordCall("cheap");
+  r.recordCall("mid");
+  const r2 = new ModelRouter(["cheap", "mid", "big"], stats);
+  assert.deepEqual(r2.snapshot().calls, { cheap: 1, mid: 1 });
+  assert.deepEqual(r2.snapshot().escalations, { mid: 2, big: 1 });
+  // A start model off the ladder stands routing down.
+  const st3 = r.newState("gpt-9");
+  assert.equal(st3.active, false);
+  r.beginTurn(st3);
+  r.observeToolStatus(st3, "error");
+  assert.equal(r.maybeEscalateFromTools(st3), undefined, "inactive routing never steps up");
+  assert.deepEqual(parseLadder(" a , b ,, a "), ["a", "b"]);
+  console.log("ok adaptive routing");
+}
+
+// ---- routing gap 1: user signals step the ladder up (feedback detector, interpreter)
+{
+  const stats = mkdtempSync(join(tmpdir(), "vdom-routing-"));
+  const r = new ModelRouter(["cheap", "mid", "big"], stats);
+  const st = r.newState("cheap");
+  r.beginTurn(st);
+  r.notePending(st);
+  r.notePending(st);
+  assert.equal(st.pendingUp, "feedback", "one queued step, not more");
+  r.beginTurn(st); // a pending step survives the turn boundary
+  const up = r.applyPending(st);
+  assert.equal(up?.from, "cheap");
+  assert.equal(up?.to, "mid");
+  assert.equal(up?.reason, "feedback");
+  assert.equal(st.stepUpDone, false, "the mid-turn escalation budget is untouched");
+  assert.equal(r.applyPending(st), undefined, "the queue is consumed once");
+  assert.equal(r.escalate(st, "llm_error")?.to, "big", "mid-turn escalation still available");
+  const top = r.newState("big");
+  r.beginTurn(top);
+  r.notePending(top);
+  assert.equal(top.pendingUp, undefined, "no queued step at the top rung");
+  console.log("ok routing: user-signal step-up");
+}
+
+// ---- routing gap 2: decay — escalated turns keep the rung for themselves and the next, then step down
+{
+  const stats = mkdtempSync(join(tmpdir(), "vdom-routing-"));
+  const r = new ModelRouter(["cheap", "mid", "big"], stats);
+  const st = r.newState();
+  r.beginTurn(st);
+  r.escalate(st, "llm_error");
+  r.endTurn(st, false); // the escalated turn itself was bad
+  assert.equal(r.beginTurn(st), undefined, "the next turn keeps the earned rung");
+  assert.equal(r.current(st), "mid");
+  r.endTurn(st, true); // clean
+  assert.equal(r.current(st), "mid", "... and serves it");
+  const down = r.beginTurn(st);
+  assert.equal(down?.reason, "decay");
+  assert.equal(down?.to, "cheap", "the turn after the protected one steps back to rung 0");
+  assert.equal(r.current(st), "cheap");
+  // A bad turn stops decay: no step down while turns keep going badly.
+  r.endTurn(st, false);
+  const stMid = r.newState("mid");
+  const st2 = stMid;
+  assert.equal(st2.position, 1);
+  r.endTurn(st2, true);
+  const down2 = r.beginTurn(st2);
+  assert.equal(down2?.reason, "decay", "decay resumes after a clean turn");
+  assert.equal(r.current(st2), "cheap");
+  // Never below rung 0.
+  r.endTurn(st2, true);
+  assert.equal(r.beginTurn(st2), undefined, "rung 0 never decays");
+  console.log("ok routing: decay");
+}
+
+// ---- routing gap 3: bucket learning — hot buckets start on rung 1
+{
+  const stats = mkdtempSync(join(tmpdir(), "vdom-routing-"));
+  const r = new ModelRouter(["cheap", "mid"], stats);
+  const cwd = process.cwd();
+  const key = bucketKey("fix the failing test", cwd);
+  assert.equal(classifyRequest("fix the failing test"), "fix");
+  assert.equal(classifyRequest("what does this do?"), "question");
+  assert.equal(classifyRequest("add a login page"), "feature");
+  assert.equal(classifyRequest("refactor the store"), "refactor");
+  assert.equal(classifyRequest("hi"), "other");
+  assert.equal(key, `fix${isHarnessCheckout(cwd) ? "/harness" : ""}`, "kind plus harness flag");
+  // Five turns on rung 0, three bad → bad-rate 0.6 > 0.4.
+  const st = r.newState();
+  for (const bad of [true, false, true, false, true]) {
+    r.beginTurn(st);
+    st.routedCall = true;
+    r.recordTurn(st, "fix the failing test", cwd, bad);
+  }
+  const fresh = r.newState();
+  r.beginTurn(fresh);
+  const up = r.learnedStart(fresh, "please fix the bug", cwd);
+  assert.equal(up?.reason, "learned");
+  assert.equal(up?.detail, key);
+  assert.equal(r.current(fresh), "mid", "hot buckets start one rung up");
+  r.endTurn(fresh, true);
+  assert.equal(r.beginTurn(fresh)?.to, "cheap", "a learned start decays at the same turn's end");
+  // A cold bucket stays on rung 0.
+  const cold = r.newState();
+  r.beginTurn(cold);
+  assert.equal(r.learnedStart(cold, "what is this file?", cwd), undefined, "cold buckets stay cheap");
+  // Four turns are not enough to flag a bucket hot.
+  const r3 = new ModelRouter(["cheap", "mid"], stats);
+  const st2 = r3.newState();
+  for (const bad of [true, true, true, true]) {
+    r3.beginTurn(st2);
+    st2.routedCall = true;
+    r3.recordTurn(st2, "add a feature", cwd, bad);
+  }
+  const fresh2 = r3.newState();
+  r3.beginTurn(fresh2);
+  assert.equal(r3.learnedStart(fresh2, "add a feature", cwd), undefined, "under MIN_BUCKET_TURNS stays cheap");
+  // Stats persist: a fresh router in the same home re-learns.
+  const r4 = new ModelRouter(["cheap", "mid"], stats);
+  const fresh3 = r4.newState();
+  r4.beginTurn(fresh3);
+  assert.equal(r4.learnedStart(fresh3, "fix the build", cwd)?.detail, key, "bucket stats survive restarts");
+  const desc = describeStats(r4.snapshot());
+  assert.match(desc, new RegExp(`${key.replace("/", "\\/")} @ rung 0: 5 turns, 3 bad`));
+  console.log("ok routing: bucket learning");
+}
+
+// ---- routing: a saved position + hold survives session resume
+{
+  const stats = mkdtempSync(join(tmpdir(), "vdom-routing-"));
+  const r = new ModelRouter(["cheap", "mid", "big"], stats);
+  const saved = r.newState("mid", { position: 1, hold: 0, prevClean: true });
+  assert.equal(saved.position, 1, "a resumed session keeps its rung");
+  assert.equal(saved.hold, 0, "... and its decay counters");
+  assert.equal(r.newState("mid", { position: 2, hold: 0, prevClean: true }).position, 1, "a stale saved position falls back to the model's rung");
+  assert.equal(r.newState("gpt-9", { position: 1, hold: 0, prevClean: true }).active, false, "off-ladder model stands routing down even with saved state");
+  console.log("ok routing: resume persistence");
 }
 
 console.log("unit selftest passed");

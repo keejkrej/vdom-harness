@@ -30,6 +30,7 @@ export type EventType =
   | "issue"
   | "lesson"
   | "guard"
+  | "routing"
   | "error";
 
 export type HistoryEvent = {
@@ -350,6 +351,11 @@ export function renderMarkdown(events: HistoryEvent[], opts: RenderOptions = {})
       case "llm.error":
         lines.push(`- ✗ model error (${s(d.errorType)}${d.willRetry ? ", retrying" : ""}): ${clipLines(s(d.message), 3, 400)} \`[${e.id}]\``);
         break;
+      case "routing": {
+        const to = s(d.reason) === "decay" ? `↓ ${s(d.from)} → ${s(d.to)}` : `↗ ${s(d.from)} → ${s(d.to)}`;
+        lines.push(`- ${to} **routing** (${s(d.reason)}, at ${s(d.at)}) \`[${e.id}]\``);
+        break;
+      }
       case "compaction.end":
         lines.push("", `---`, `**Compacted** (${s(d.trigger)}): ${s(d.tokensBefore)} → ${s(d.tokensAfter)} tokens${d.ok ? "" : " — FAILED"} \`[${e.id}]\``, "", "---", "");
         break;

@@ -43,6 +43,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import { vdomHome, type AgentConfig } from "./config.js";
 import { compact, estimateTokens, isContextOverflow, RESERVE_TOKENS, type CompactionState } from "./compaction.js";
+import { ModelRouter, stepReason, TRIGGER_REASONS, type RouteState } from "./routing.js";
 import { applyGraph, codingGraph, compileSystemPrompt, describeGraph } from "./graph.js";
 import { listModels, LlmError, streamChat, THOUGHT_LEVELS, type ChatMessage, type ChatPart, type ChatToolCall, type ThoughtLevel, type ToolSchema } from "./llm.js";
 import { collectSpecs, McpHub } from "./mcp.js";
@@ -112,6 +113,10 @@ type LiveSession = {
   guards: Set<string>;
   /** Successful edits / checks this turn, for the verify_claims guard. */
   claimState: { edits: number; verifiedEdits: number; nudged: boolean };
+  /** Tool result statuses this turn, for routing's repeated-failure signal. */
+  turnToolStatuses: string[];
+  /** Adaptive routing state; the model id lives in rec.model. */
+  route: RouteState;
 };
 
 /** A conversation the loop drives: the session itself, or a subagent's scratch context. */
@@ -137,6 +142,8 @@ class Cancelled extends Error {}
 export class VdomAgent implements Agent {
   private readonly sessions = new Map<string, LiveSession>();
   private readonly store: SessionStore;
+  /** Shared cheap-first ladder; undefined = routing off. */
+  private readonly router?: ModelRouter;
   private modelCache?: { at: number; ids: string[] };
 
   constructor(
@@ -144,6 +151,7 @@ export class VdomAgent implements Agent {
     private readonly cfg: AgentConfig,
   ) {
     this.store = new SessionStore(cfg.dataDir);
+    if (cfg.routeLadder.length > 0) this.router = new ModelRouter(cfg.routeLadder, join(vdomHome(), "routing"));
     void this.store.pruneEmpty().catch(() => {});
   }
 
@@ -193,7 +201,8 @@ export class VdomAgent implements Agent {
       id: randomUUID(),
       cwd: params.cwd,
       roots: [params.cwd, ...(params.additionalDirectories ?? [])],
-      model: this.cfg.model,
+      // Routing on: new sessions start on the cheapest rung.
+      model: this.router ? this.router.ladder[0]! : this.cfg.model,
       mode: "agent",
       thought: "medium",
       graph: loadRepoGraph(params.cwd) ?? codingGraph(),
@@ -276,6 +285,8 @@ export class VdomAgent implements Agent {
     if (params.configId === "model") {
       if (!value) throw RequestError.invalidParams(undefined, "model must be non-empty");
       live.rec.model = value;
+      live.route.active = false; // a manually picked model stands routing down for this session
+      live.rec.route = undefined;
       live.lastPromptTokens = undefined;
     } else if (params.configId === "mode") {
       await this.applyMode(live, value);
@@ -309,6 +320,8 @@ export class VdomAgent implements Agent {
         const modelId = String(params.modelId ?? "").trim();
         if (!modelId) throw RequestError.invalidParams(undefined, "modelId required");
         live.rec.model = modelId;
+        live.route.active = false; // a manually picked model stands routing down for this session
+        live.rec.route = undefined;
         await this.store.save(live.rec);
         return {};
       }
@@ -335,7 +348,11 @@ export class VdomAgent implements Agent {
       // Steering: delivered after the current tool batch, before the next model call.
       live.log.append("user.message", { text: userText, source: "steer" });
       const fb = detectFeedback(userText);
-      if (fb) this.onBadTurn(live, live.log.turn, { source: "keyword", text: userText, detail: `${fb.signal}: ${fb.matched}` });
+      if (fb) {
+        this.onBadTurn(live, live.log.turn, { source: "keyword", text: userText, detail: `${fb.signal}: ${fb.matched}` });
+        // Routing: steering that reads as frustration steps the ladder up mid-turn.
+        if (this.router) this.router.notePending(live.route);
+      }
       live.pending.push(userMsg);
       return { stopReason: await live.running };
     }
@@ -357,6 +374,8 @@ export class VdomAgent implements Agent {
         `\n\n[vdom: this message reads as dissatisfaction with your previous turn (${fb.signal}: "${fb.matched}"). In one sentence, say what went wrong — check the history tool for turn ${prev.turn} if unsure — then fix it properly. Do not just apologize.]`,
       );
       this.onBadTurn(live, prev.turn, { source: "keyword", text: userText, detail: `${fb.signal}: ${fb.matched}` }, prev);
+      // Routing: bad-turn feedback on the previous turn starts this turn one rung up.
+      if (this.router) this.router.notePending(live.route);
     } else if (prev && userText.trim() && !userText.startsWith("/")) {
       this.interpretInBackground(live, userText, prev);
     }
@@ -371,7 +390,22 @@ export class VdomAgent implements Agent {
     const abort = new AbortController();
     live.abort = abort;
     live.turnTools = [];
+    live.turnToolStatuses = [];
     live.claimState = { edits: 0, verifiedEdits: 0, nudged: false };
+    // Routing: decay first (a clean turn past the protection window steps down
+    // one rung), then a learned-hot bucket may start one rung up.
+    const decay = this.router?.beginTurn(live.route);
+    if (decay) {
+      live.log.append("routing", { from: decay.from, to: decay.to, reason: decay.reason, at: "turn_start" });
+      rec.model = decay.to;
+    }
+    if (this.router) {
+      const up = this.router.learnedStart(live.route, userText, rec.cwd);
+      if (up) {
+        live.log.append("routing", { from: up.from, to: up.to, reason: stepReason(up), at: "turn_start" });
+        rec.model = up.to;
+      }
+    }
     const run = (async (): Promise<StopReason> => {
       let stop: StopReason = "end_turn";
       try {
@@ -394,6 +428,17 @@ export class VdomAgent implements Agent {
         const assistantText = finalText && finalText.role === "assistant" ? (finalText.content ?? "") : "";
         live.log.append("turn.end", { turn, stopReason: stop, durationMs: Date.now() - t0, finalText: clip(assistantText, 4000) });
         live.lastTurn = { turn, userText, assistantText, tools: live.turnTools, stopReason: stop };
+        const steps = live.route.steps.splice(0);
+        if (steps.length) live.notices.push(`Model routing moved this turn: ${steps.map((s) => `${s.from} → ${s.to} (${stepReason(s)})`).join(", ")}. Now on ${live.rec.model}.`);
+        if (this.router) {
+          // Routing turn-end bookkeeping: was this turn clean, and what outcome did
+          // its starting rung earn in the request bucket? Decay happens at the next turn start.
+          const st = live.route;
+          const bad = st.turnBad || steps.some((s) => TRIGGER_REASONS.has(s.reason));
+          this.router.endTurn(st, !bad && (stop === "end_turn" || stop === "cancelled"));
+          this.router.recordTurn(st, userText, rec.cwd, bad || stop === "max_turn_requests");
+          rec.route = st.active ? { position: st.position, hold: st.hold, prevClean: st.prevClean } : undefined;
+        }
         if (live.abort === abort) live.abort = undefined;
         live.running = undefined;
         await this.store.save(rec).catch((e) => process.stderr.write(`vdom: save failed: ${String(e)}\n`));
@@ -443,6 +488,8 @@ export class VdomAgent implements Agent {
         trace("interpretation", { session: live.rec.id, turn: prev.turn, result: r });
         if (r?.unhappy && r.target !== "other") {
           this.onBadTurn(live, prev.turn, { source: "interpreter", text: userText, detail: `${r.category} (${r.frustration.toFixed(2)}): ${r.reason}` }, prev, r);
+          // Routing: the interpreter read frustration with the previous turn; step up before the next model call.
+          if (this.router) this.router.notePending(live.route);
         }
       })
       .catch((err) => trace("interpretation_error", { session: live.rec.id, error: String(err) }))
@@ -616,7 +663,20 @@ export class VdomAgent implements Agent {
       const tools = this.toolSchemas(live, child);
       const messageId = randomUUID();
       const who = whoOf(child);
+      if (!child && this.router) {
+        // Routing: apply a user-signal step queued by the feedback detector or interpreter.
+        const up = this.router.applyPending(live.route);
+        if (up) {
+          live.log.append("routing", { from: up.from, to: up.to, reason: stepReason(up), at: "feedback" }, { step, who });
+          rec.model = up.to;
+        }
+      }
       const model = child?.model ?? rec.model;
+      const routed = !child && this.router && live.route.active && this.router.ladder[live.route.position] === model;
+      if (routed) {
+        this.router.recordCall(model);
+        live.route.routedCall = true;
+      }
       const t0 = Date.now();
       const estTokens = estimateTokens([{ role: "system", content: system }, ...conv.messages]);
       live.log.append("llm.request", { model, thought: rec.thought, messages: conv.messages.length, tools: tools.length, contextTokensEst: estTokens, contextWindow: this.cfg.contextTokens }, { step, who });
@@ -659,6 +719,23 @@ export class VdomAgent implements Agent {
           if (r) continue;
           throw new Error(`Context overflow recovery failed: nothing left to compact. Try a model with a larger context window. (${err.message})`);
         }
+        // Routing: a model error (after its own retries) steps up the ladder once; the
+        // top rung ends the turn with a clear message instead of silently spending more.
+        const up = !signal.aborted && routed ? this.router!.escalate(live.route, "llm_error") : undefined;
+        if (up) {
+          live.log.append("routing", { from: up.from, to: up.to, reason: up.reason, at: "llm_error" }, { step, who });
+          rec.model = up.to;
+          continue;
+        }
+        if (routed) {
+          if (!signal.aborted) live.route.turnBad = true; // top rung or out of steps: a failure regardless
+          if (live.route.position === this.router!.ladder.length - 1 && !signal.aborted) {
+            const msg = `The routing ladder's top model ${model} failed: ${err instanceof Error ? err.message : String(err)} Pick a different model or adjust the ladder.`;
+            conv.messages.push({ role: "assistant", content: msg });
+            if (!child) await this.say(rec.id, msg);
+            return "end_turn";
+          }
+        }
         throw err;
       }
       trace("llm_response", {
@@ -697,7 +774,15 @@ export class VdomAgent implements Agent {
 
       if (res.toolCalls.length === 0 && !res.content.trim() && res.finishReason !== "length" && res.finishReason !== "content_filter") {
         // An empty answer is a stalled model, not a finished task (seen in a recorded fixer session that "ended" with nothing).
-        emptyRetries++;
+        // Routing: the first empty response steps up the ladder instead of just retrying the same model.
+        const up = routed ? this.router!.escalate(live.route, "empty_response") : undefined;
+        if (up) {
+          live.log.append("routing", { from: up.from, to: up.to, reason: up.reason, at: "empty_response" }, { step, who });
+          conv.messages.pop();
+          continue;
+        }
+        if (routed) live.route.turnBad = true;
+        emptyRetries++; // no rung left: keep the same-model retry path
         conv.messages.pop();
         live.log.append("llm.error", { model, errorType: "empty_response", message: `no text and no tool calls (finish_reason ${res.finishReason ?? "missing"})`, willRetry: emptyRetries <= 2 }, { step, who });
         if (emptyRetries <= 2) {
@@ -711,7 +796,17 @@ export class VdomAgent implements Agent {
       }
       if (res.toolCalls.length === 0) {
         if (!child && live.pending.length) continue;
-        if (!child && this.claimGuard(live, conv, res.content)) continue;
+        // Routing: a verify_claims nudge means the model overstated; step up for the rest of the turn.
+        if (routed && this.claimGuard(live, conv, res.content)) {
+          live.route.turnBad = true;
+          const up = this.router!.escalate(live.route, "guard_nudge");
+          if (up) {
+            live.log.append("routing", { from: up.from, to: up.to, reason: up.reason, at: "guard_nudge" }, { step, who });
+            rec.model = up.to;
+          }
+          continue;
+        }
+        if (!child && !routed && this.claimGuard(live, conv, res.content)) continue;
         if (!child) await this.store.save(rec);
         if (res.finishReason === "length") return "max_tokens";
         if (res.finishReason === "content_filter") return "refusal";
@@ -732,6 +827,17 @@ export class VdomAgent implements Agent {
 
       await this.runToolCalls(live, conv, res.toolCalls, signal, child);
       if (!child) await this.store.save(rec);
+      // Routing: repeated tool failures within one turn step up the ladder once.
+      const statuses = live.turnToolStatuses.splice(0);
+      if (routed) {
+        for (const s of statuses) this.router!.observeToolStatus(live.route, s);
+        if (this.router!.toolFailuresAtThreshold(live.route)) live.route.turnBad = true;
+        const up = this.router!.maybeEscalateFromTools(live.route);
+        if (up) {
+          live.log.append("routing", { from: up.from, to: up.to, reason: up.reason, at: "tool_errors" }, { step, who });
+          rec.model = up.to;
+        }
+      }
     }
     return "max_turn_requests";
   }
@@ -808,6 +914,7 @@ export class VdomAgent implements Agent {
         { who },
       );
       if (!child) live.turnTools.push(`${name} ${clip(call.function.arguments, 140)} → ${status}${error ? `: ${clip(error.message, 160)}` : ""}`);
+      if (!child) live.turnToolStatuses.push(status);
     };
 
     let args: Record<string, unknown> = {};
@@ -1150,6 +1257,8 @@ export class VdomAgent implements Agent {
       diagnosed: new Set(),
       guards: new Set(this.cfg.guards),
       claimState: { edits: 0, verifiedEdits: 0, nudged: false },
+      turnToolStatuses: [],
+      route: this.router ? this.router.newState(rec.model, rec.route) : { active: false, position: 0, stepUpDone: false, toolErrors: 0, hold: 0, prevClean: false, turnBad: false, routedCall: false, startRung: 0, steps: [] },
     };
     this.sessions.set(rec.id, live);
     return live;

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parseLadder } from "./routing.js";
 
 /**
  * Coding-agent settings. Precedence: CLI flags > env > ~/.vdom/config.json > defaults.
@@ -35,6 +36,8 @@ export type AgentConfig = {
   diagnosisModel?: string;
   /** Runtime guards on by default for every session (e.g. "verify_claims"). */
   guards: string[];
+  /** Cheap-first model ladder, strongest last. Empty = routing off. */
+  routeLadder: string[];
 };
 
 export const OLLAMA_CLOUD_BASE_URL = "https://ollama.com/v1";
@@ -165,6 +168,14 @@ export function loadConfig(overrides: ConfigOverrides = {}): AgentConfig {
     })(),
     diagnosisModel: overrides.diagnosisModel ?? env("VDOM_DIAGNOSIS_MODEL") ?? file.diagnosisModel,
     guards: overrides.guards ?? file.guards ?? ["verify_claims"],
+    routeLadder: (() => {
+      const v =
+        overrides.routeLadder ??
+        (env("VDOM_ROUTING") === "off" ? [] : undefined) ??
+        (env("VDOM_ROUTE_LADDER") ? parseLadder(env("VDOM_ROUTE_LADDER")!) : undefined) ??
+        (env("VDOM_ROUTING") === "off" ? [] : file.routeLadder ?? []);
+      return v;
+    })(),
   };
 }
 

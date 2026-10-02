@@ -549,6 +549,171 @@ async function main(): Promise<void> {
     assert.equal(h.permissions.length, 0);
     assert.match(toolResults().at(-1)!, /forced/);
     console.log("ok --force");
+
+    // ---- adaptive model routing: cheap-first, escalate on failure, position persists
+    h.child.kill();
+    const routedEnv = { ...env, VDOM_HOME: mkdtempSync(join(tmpdir(), "vdom-route-home-")), VDOM_ROUTE_LADDER: "mock-small,mock-coder", VDOM_MODEL: "" };
+    h = startAgent(routedEnv);
+    await h.conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    const s4 = await h.conn.newSession({ cwd: ws, mcpServers: [] });
+    const sid4 = s4.sessionId;
+    assert.equal(s4.configOptions?.find((o) => o.id === "model")?.currentValue, "mock-small", "sessions start on the cheapest rung");
+    // The cheap model errors → the ladder steps up mid-turn and recovers with the strong model.
+    const reqAt = requests.length;
+    script.push({ status: 400, body: '{"error":{"message":"boom"}}' }, { text: "recovered on the stronger model" });
+    r = await h.conn.prompt({ sessionId: sid4, prompt: [{ type: "text", text: "routed task" }] });
+    assert.equal(r.stopReason, "end_turn");
+    assert.equal(requests[reqAt]!.model, "mock-small");
+    assert.equal(requests[reqAt + 1]!.model, "mock-coder");
+    assert.match(texts(h.updates, "agent_message_chunk"), /Model routing moved this turn: mock-small → mock-coder \(llm_error\)/);
+    console.log("ok routing: cheap-first + escalate on error");
+
+    // Position persists: the strong model keeps serving the next (protected) turn...
+    script.push({ text: "still routed" });
+    await h.conn.prompt({ sessionId: sid4, prompt: [{ type: "text", text: "next turn" }] });
+    assert.equal(requests.at(-1)!.model, "mock-coder");
+    assert.equal(requests.length, reqAt + 3, "no wasted extra requests");
+    console.log("ok routing: position persists across turns");
+
+    // ...then decay: the turn after the protected one starts back on the cheap rung.
+    script.push({ text: "cheap again" });
+    await h.conn.prompt({ sessionId: sid4, prompt: [{ type: "text", text: "and the next one" }] });
+    assert.equal(requests.at(-1)!.model, "mock-small", "a clean turn past the protection window decays to rung 0");
+    console.log("ok routing: decay after clean turns");
+
+    // Escalate on repeated tool failures within a turn (3 failing edits). Rung 0 was
+    // re-earned by decay, so this steps up to the top rung again.
+    const toolReqAt = requests.length;
+    script.push(
+      { calls: [{ name: "edit", args: { path: "app.txt", edits: [{ oldText: "nope", newText: "x" }] } }] },
+      { calls: [{ name: "edit", args: { path: "app.txt", edits: [{ oldText: "nope", newText: "x" }] } }] },
+      { calls: [{ name: "edit", args: { path: "app.txt", edits: [{ oldText: "nope2", newText: "y" }] } }] },
+      { text: "fixed now" },
+    );
+    await h.conn.prompt({ sessionId: sid4, prompt: [{ type: "text", text: "fix the broken edits" }] });
+    assert.equal(requests[toolReqAt]!.model, "mock-small", "starts cheap after decay");
+    assert.equal(requests[toolReqAt + 2]!.model, "mock-small", "the first two failed tools stay on the cheap rung");
+    assert.equal(requests[toolReqAt + 3]!.model, "mock-coder", "the third failed tool steps the ladder up");
+    console.log("ok routing: tool-error escalation");
+
+    // Top-rung failure ends the turn with a clear message instead of a silent fallback.
+    const topMsgs = h.updates.length;
+    script.push({ status: 400, body: '{"error":{"message":"boom"}}' });
+    r = await h.conn.prompt({ sessionId: sid4, prompt: [{ type: "text", text: "fail at top" }] });
+    assert.equal(r.stopReason, "end_turn");
+    assert.match(texts(h.updates.slice(topMsgs), "agent_message_chunk"), /routing ladder's top model mock-coder failed/);
+    console.log("ok routing: top-rung failure reported");
+
+    // ---- routing: user-signal escalation and guard nudge
+    h.child.kill();
+    const sigEnv = { ...routedEnv, VDOM_HOME: mkdtempSync(join(tmpdir(), "vdom-route-home-")), VDOM_SENTIMENT_MODEL: "", VDOM_DIAGNOSE: "off" };
+    h = startAgent(sigEnv);
+    await h.conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    const s5 = await h.conn.newSession({ cwd: ws, mcpServers: [] });
+    const sid5 = s5.sessionId;
+    assert.equal(s5.configOptions?.find((o) => o.id === "model")?.currentValue, "mock-small");
+    // Turn 1: clean turn on the cheap model.
+    script.push({ text: "done quietly" });
+    await h.conn.prompt({ sessionId: sid5, prompt: [{ type: "text", text: "do a small thing" }] });
+    assert.equal(requests.at(-1)!.model, "mock-small");
+    // Turn 2: bad-turn feedback ("no, that's wrong") steps the next turn up before the first model call.
+    const fbReqs = requests.length;
+    script.push({ text: "fixed it properly" }, { text: "and stays up here" }, { text: "decay happens later" });
+    await h.conn.prompt({ sessionId: sid5, prompt: [{ type: "text", text: "no, that's wrong" }] });
+    assert.equal(requests[fbReqs]!.model, "mock-coder", "feedback on the previous turn starts this turn one rung up");
+    assert.match(texts(h.updates, "agent_message_chunk"), /Model routing moved this turn: mock-small → mock-coder \(feedback\)/);
+    await h.conn.prompt({ sessionId: sid5, prompt: [{ type: "text", text: "continue" }] });
+    assert.equal(requests.at(-1)!.model, "mock-coder", "the feedback step protects the next turn too");
+    await h.conn.prompt({ sessionId: sid5, prompt: [{ type: "text", text: "continue again" }] });
+    assert.equal(requests.at(-1)!.model, "mock-small", "then decays back to rung 0");
+    console.log("ok routing: bad-turn feedback escalates, then decays");
+
+    // Turn: a verify_claims guard nudge steps the ladder up for the rest of the turn.
+    // The guard needs a successful edit without a verification claim: fresh file so the edit lands.
+    writeFileSync(join(ws, "guard.txt"), "alpha\n");
+    const guardReqs = requests.length;
+    script.push(
+      { calls: [{ name: "edit", args: { path: "guard.txt", edits: [{ oldText: "alpha", newText: "beta" }] } }] },
+      { text: "fixed it, all tests pass" }, // success claim without a check → nudge
+      { text: "running the check now" },
+    );
+    await h.conn.prompt({ sessionId: sid5, prompt: [{ type: "text", text: "edit the file please" }] });
+    assert.equal(requests[guardReqs]!.model, "mock-small");
+    assert.equal(requests[guardReqs + 1]!.model, "mock-small", "the claim itself is served by the cheap rung");
+    assert.equal(requests[guardReqs + 2]!.model, "mock-coder", "the verify_claims nudge steps the rest of the turn up");
+    assert.match(texts(h.updates, "agent_message_chunk"), /Model routing moved this turn: mock-small → mock-coder \(guard_nudge\)/);
+    console.log("ok routing: guard nudge escalates");
+
+    // ---- routing: resume keeps the rung; learned buckets start on rung 1
+    h.child.kill();
+    h = startAgent(sigEnv); // sid5's home
+    await h.conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    // The session that ended at the top rung keeps it across restart: rec.route was persisted.
+    const resumed5 = await h.conn.resumeSession({ sessionId: sid5, cwd: ws });
+    assert.equal(resumed5.configOptions?.find((o) => o.id === "model")?.currentValue, "mock-coder", "resume keeps the earned rung");
+    const resumeReqs = requests.length;
+    script.push({ text: "resumed on the strong model" });
+    await h.conn.prompt({ sessionId: sid5, prompt: [{ type: "text", text: "continue after restart" }] });
+    assert.equal(requests.at(-1)!.model, "mock-coder", "the resumed session serves on its saved rung");
+    console.log("ok routing: resume keeps the rung");
+
+    // Learned buckets: five bad rung-0 turns in one bucket make new turns there start on rung 1.
+    const learnHome = mkdtempSync(join(tmpdir(), "vdom-route-home-"));
+    const learnEnv = { ...routedEnv, VDOM_HOME: learnHome };
+    h.child.kill();
+    h = startAgent(learnEnv);
+    await h.conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    const s6 = await h.conn.newSession({ cwd: ws, mcpServers: [] });
+    const sid6 = s6.sessionId;
+    const fixText = "fix the failing build"; // classifyRequest → "fix" bucket
+    // One real bad rung-0 turn: the cheap model 400s, retries exhaust, the turn ends at rung 0.
+    script.push({ status: 400, body: '{"error":{"message":"boom"}}' });
+    await h.conn.prompt({ sessionId: sid6, prompt: [{ type: "text", text: fixText }] }).catch(() => undefined);
+    const recStats = JSON.parse(readFileSync(join(learnHome, "routing", "stats.json"), "utf8"));
+    assert.equal(recStats.buckets.fix["0"].turns, 1, "bad turns are recorded per bucket and starting rung");
+    assert.equal(recStats.buckets.fix["0"].bad, 1);
+    // Seed the rest: a hot bucket is rung-0 bad-rate above 40% over at least 5 turns.
+    // (With a 2-rung ladder, five real rung-0 failures can't accumulate: the first one
+    // escalates and bad turns never decay. Seeding the stats file directly instead.)
+    writeFileSync(join(learnHome, "routing", "stats.json"), JSON.stringify({ ...recStats, buckets: { fix: { "0": { turns: 5, bad: 3 } } } }));
+    // A fresh process in the same home re-learns: "fix" turns now start on rung 1.
+    h.child.kill();
+    h = startAgent(learnEnv);
+    await h.conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    const s7 = await h.conn.newSession({ cwd: ws, mcpServers: [] });
+    assert.equal(s7.configOptions?.find((o) => o.id === "model")?.currentValue, "mock-small", "sessions still start cheap");
+    const learnReqs = requests.length;
+    script.push({ text: "learned start" });
+    await h.conn.prompt({ sessionId: s7.sessionId, prompt: [{ type: "text", text: "please fix this bug" }] });
+    assert.equal(requests[learnReqs]!.model, "mock-coder", "a learned-hot bucket starts one rung up");
+    assert.match(texts(h.updates, "agent_message_chunk"), /Model routing moved this turn: mock-small → mock-coder \(learned: fix\)/);
+    const learnedStats = JSON.parse(readFileSync(join(learnEnv.VDOM_HOME!, "routing", "stats.json"), "utf8"));
+    assert.ok(learnedStats.buckets.fix, "bucket outcomes recorded");
+    console.log("ok routing: learned bucket starts on rung 1");
+
+    // Routing stats persist across processes (learning signal) and a manual model pick stands routing down.
+    h.child.kill();
+    h = startAgent(routedEnv);
+    await h.conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    const s8 = await h.conn.newSession({ cwd: ws, mcpServers: [] });
+    assert.equal(s8.configOptions?.find((o) => o.id === "model")?.currentValue, "mock-small");
+    const statsFile = join(routedEnv.VDOM_HOME!, "routing", "stats.json");
+    const routeStats = JSON.parse(readFileSync(statsFile, "utf8"));
+    assert.equal(routeStats.escalations["mock-coder"], 2, "escalations recorded for learning");
+    assert.ok(routeStats.calls["mock-small"] >= 1);
+    await h.conn.setSessionConfigOption({ sessionId: s8.sessionId, configId: "model", value: "mock-big" });
+    const manualMsgs = h.updates.length;
+    const manualReqs = requests.length;
+    script.push({ status: 400, body: '{"error":{"message":"boom"}}' });
+    r = await h.conn.prompt({ sessionId: s8.sessionId, prompt: [{ type: "text", text: "manual model" }] }).catch((err: unknown) => {
+      // expected: with routing stood down the raw model error surfaces to the client
+      assert.match(String(err), /400 Bad Request: .*boom/);
+      return { stopReason: "end_turn" as const };
+    });
+    assert.doesNotMatch(texts(h.updates.slice(manualMsgs), "agent_message_chunk"), /routing ladder/, "manual pick stands routing down");
+    assert.equal(requests.at(-1)!.model, "mock-big", "the manually picked model serves");
+    assert.equal(requests.length, manualReqs + 1, "no ladder step-up requests");
+    console.log("ok routing: stats persist; manual pick stands routing down");
   } finally {
     h.child.kill();
     server.close();

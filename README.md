@@ -46,6 +46,18 @@ Context: `AGENTS.md`/`CLAUDE.md` from `~/.vdom` and every directory root → cwd
 
 Modes (ACP session modes and the `mode` config option): `agent` (edits inside the workspace run; shell commands and edits outside it ask), `ask` (everything asks), `plan` (read-only). `--force` never asks.
 
+### Adaptive model routing
+
+Cheap-first, escalate when needed, decay when it doesn't. Set a ladder with `--ladder cheap,mid,big`, `VDOM_ROUTE_LADDER`, or `routeLadder` in `~/.vdom/config.json` (off by default; `VDOM_ROUTING=off` disables). New sessions start on the cheapest rung. Within a turn, one of these steps the ladder up one rung (at most once per turn):
+
+- a model error, an empty response, or three failed tool calls,
+- a `verify_claims` guard nudge (the model claimed success it never checked),
+- bad-turn feedback on the previous turn (keyword detector or sentiment interpreter): the *next* turn starts one rung up.
+
+An escalated turn keeps the rung for itself and the next one; after that, each clean turn steps back down one rung until the session is back on the cheapest model. Bad turns never decay — only clean ones do. The position and decay counters persist in the session record, so a resumed session keeps its rung. A manually picked model stands routing down; if the top rung fails, the turn ends with a clear message — no silent fallback spending.
+
+The router also learns, simply and deterministically: turns are bucketed by request kind (question/fix/feature/refactor/other, plus whether the cwd is a vdom harness checkout), and each bucket tracks per-starting-rung outcomes. When rung 0 goes bad in over 40% of ≥5 recorded turns, new turns in that bucket start one rung up (re-evaluated every turn — learning never permanently elevates). The reason is logged in the routing event (`learned: fix/harness`). Stats persist in `~/.vdom/routing/stats.json`; `vdom doctor` shows calls + escalations per model and a per-bucket table while routing is on. Every step (up or down) is logged as a `routing` event in the session log.
+
 ### Driving and debugging
 
 ```

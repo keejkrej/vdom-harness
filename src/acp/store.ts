@@ -23,6 +23,8 @@ export type SessionRecord = {
   graph: AgentGraph;
   /** Conversation without the system prompt (recompiled every step). */
   messages: ChatMessage[];
+  /** Routing position + decay counters, so a resumed session keeps its rung. */
+  route?: { position: number; hold: number; prevClean: boolean };
   /** Rolling summary + file tracking from earlier compactions. */
   compaction: CompactionState;
   forkedFrom?: string;

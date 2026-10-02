@@ -62,6 +62,11 @@ export function parseArgs(argv: string[]): Parsed {
       case "-m":
         overrides.model = next();
         break;
+      case "--ladder": {
+        const v = next();
+        overrides.routeLadder = v.trim() ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
+        break;
+      }
       case "--base-url":
       case "--endpoint":
       case "-e":
