@@ -18,6 +18,55 @@ npm run export && npm run viz
 
 Open http://127.0.0.1:4173. The page replays `public/run.json`, an event log from a real TypeScript run — not hardcoded scores.
 
+## Coding agent (ACP)
+
+`vdom` is also a headless coding agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) on stdio. No TUI, no GUI: an ACP client (T3 Code, Zed, …) drives it. Its system prompt is compiled from an AgentGraph, and the agent can rewrite that graph mid-session with `set_agent_graph` (reconciled, diff reported). Executable kinds (`capability` / `adapter`) cannot be mounted that way.
+
+```
+npm i && npm run build && npm link     # puts `vdom` on PATH
+vdom doctor                            # config + one test completion
+vdom run --cwd ~/code/repo "fix the failing test"   # headless, auto-approves
+vdom                                   # ACP server on stdio
+```
+
+Model endpoint is any OpenAI-compatible `/chat/completions`. Precedence: CLI flags > `VDOM_BASE_URL`/`VDOM_API_KEY` > `~/.vdom/config.json` > generic provider keys > local Ollama.
+
+| Source | Endpoint | Default model |
+| --- | --- | --- |
+| `VDOM_BASE_URL` (+ `VDOM_API_KEY`) | that URL | `VDOM_MODEL` |
+| `~/.vdom/config.json` (`baseUrl`, `apiKey` or `apiKeyEnv`, `model`, `diagnosisModel`, `sentimentModel`, `models`, `contextTokens`, `guards`, …) | `baseUrl` | `model` |
+| `OLLAMA_API_KEY` | `https://ollama.com/v1` | `gpt-oss:120b` |
+| `OPENROUTER_API_KEY` | OpenRouter | `deepseek/deepseek-v4-flash-0731` |
+| `OPENAI_API_KEY` | `OPENAI_BASE_URL` or OpenAI | — |
+| none | local Ollama `http://127.0.0.1:11434/v1` | `gpt-oss:20b` |
+
+Tools (Pi/DSH-grade): `read` (text + images, 2000 lines/50KB pages), `edit` (multiple exact replacements per call, fuzzy fallback, BOM/CRLF preserved), `write`, `bash` (tail-truncated, full output spilled to a temp file, `run_in_background` jobs + `job_output`/`job_kill`), `grep`/`find`/`ls` (ripgrep), `web_fetch`, `todo_write` (ACP plan), `subagent` (fresh context, parallel), `history`, `get_agent_graph`/`set_agent_graph`, plus MCP servers from the ACP client, `~/.vdom/mcp.json`, `.vdom/mcp.json` or `.mcp.json`. Habitual names (`search`, `read_file`, `str_replace`, `shell`, …) are aliased to the real tools.
+
+Context: `AGENTS.md`/`CLAUDE.md` from `~/.vdom` and every directory root → cwd, `SYSTEM.md`/`APPEND_SYSTEM.md`, skills (`SKILL.md` in `.vdom/skills`, `.agents/skills`, `.claude/skills`), prompt templates (`.vdom/prompts`, `.claude/commands`; `/name args`), `/compact [focus]`, `/reload`. Thinking level (`off|low|medium|high`), auto-compaction with overflow recovery, steering (a prompt sent mid-turn joins the running turn), fork/load/resume/list.
+
+Modes (ACP session modes and the `mode` config option): `agent` (edits inside the workspace run; shell commands and edits outside it ask), `ask` (everything asks), `plan` (read-only). `--force` never asks.
+
+### Driving and debugging
+
+```
+vdom client --cwd <repo> -V --trace /tmp/t "<prompt>" [-p "<next>"] [-s <session> | -c]   # spawn an ACP agent (--agent "<cmd>" for any) and print the transcript
+vdom run   --cwd <repo> "<prompt>"          # same, in-process
+vdom sessions [list | show <id> [A-B] [--faults] | analyze <id>]
+vdom issues [list | show <id>]
+```
+
+Every session is an append-only `events.jsonl` (`~/.vdom/sessions/--<cwd>--/<id>/`): turns, model requests/responses with usage and timings, tool calls with arguments, results, status, errors and durations, permission decisions, compactions with trigger and tokens before/after, feedback, lessons, issues. Transcripts, findings and the resume snapshot are derived from it.
+
+### Self-improvement
+
+- **Real time (in-session).** A `verify_claims` guard stops a turn from ending on an unverified success claim. A keyword detector and a small sentiment model read each user message; a bad turn triggers a read-only background diagnostician (`diagnosisModel`) that inspects the recorded turn and the harness source. Its rule is reconciled into the live session's AgentGraph as a `lesson-N` node and applies from the next model call.
+- **Long term.** The same diagnosis files an issue (`~/.vdom/issues`). `vdom fix <issue> [--promote]` cuts a staging worktree from prod, lets vdom fix itself there, and gates the result: the new regression test must fail on the prod base and build + `npm test` must pass on staging. Only then does prod fast-forward.
+- **Environments.** `vdom env init --repo <this repo>` creates prod (`~/.vdom/env/prod`, launched through `~/.vdom/bin/vdom`); `vdom env status | stage | gate | promote | rollback | drop`.
+
+### T3 Code
+
+Use the `vdom` provider in the T3 Code fork (branch `vdom-driver`), or in stock T3 set **Settings → Providers → Cursor → Binary path** to `~/.vdom/bin/vdom.cmd` (vdom also speaks the Cursor CLI's spawn contract).
+
 ## Not Pi, not DSH
 
 Pi: you customize an agent. Abstraction stops at AgentSession + extensions.
@@ -159,6 +208,7 @@ Two gated paths sit beside topology mutation (`researchLoop` / Self-Refine):
 - src/trainer.ts -- Trainer port, FakeTrainer, adapter artifacts
 - src/lifecycle.ts -- propose → sandbox → eval → mount | reject | rollback
 - src/improve.ts -- improveLoop (topology | capability | adapter)
+- src/acp/ -- ACP coding agent: agent loop, tools, event log, feedback/diagnosis, envs + fix gate, client
 - src/demo.ts -- the loop, printed
 - src/export-run.ts -- real run to public/run.json
 - src/serve.ts -- static viz on :4173
