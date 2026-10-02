@@ -1,12 +1,17 @@
 {
   "name": "vdom-harness",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "A virtual DOM for agents: a society that observes itself and rewrites its graph, capabilities, and adapters.",
   "type": "module",
   "scripts": {
+    "acp": "tsx src/acp/cli.ts acp",
+    "vdom": "tsx src/acp/cli.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepare": "tsc",
     "demo": "tsx src/demo.ts",
-    "test": "tsx src/selftest.ts && tsx src/eval/tau2-selftest.ts",
-    "build": "tsc --noEmit",
+    "test": "tsx src/selftest.ts && tsx src/eval/tau2-selftest.ts && npm run test:acp",
+    "test:acp": "tsx src/acp/unit-selftest.ts && tsx src/acp/env-selftest.ts && tsx src/acp/acp-selftest.ts && tsx src/acp/issues-selftest.ts",
     "export": "tsx src/export-run.ts",
     "viz": "tsx src/serve.ts",
     "eval:tau2": "PYTHONPATH=python python3 -m tau2_vdom",
@@ -19,11 +24,23 @@
     "eval:tau2:obs": "PYTHONPATH=python python3 -m tau2_vdom.test_obs && PYTHONPATH=python python3 -m tau2_vdom.test_weight"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.8.0"
-  }
+    "typescript": "^5.8.0",
+    "zod": "^4.6.5"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.6.0",
+    "@modelcontextprotocol/sdk": "^1.31.0"
+  },
+  "bin": {
+    "vdom": "dist/acp/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ]
 }
