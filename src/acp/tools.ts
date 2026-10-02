@@ -497,6 +497,14 @@ export function hasRipgrep(): boolean {
 
 // ---------------------------------------------------------------- bash
 
+/** Env for bash and background jobs. Trace vars stay with this process so a nested agent does not append to the parent trace (I-20261002-1ae8). */
+export function shellChildEnv(base: NodeJS.ProcessEnv, extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...extra, GIT_PAGER: "cat", PAGER: "cat", GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true" };
+  delete env.VDOM_TRACE;
+  delete env.VDOM_TRACE_FULL;
+  return env;
+}
+
 export function shellArgs(shell: string, command: string): string[] {
   const base = shell.toLowerCase().split(/[\\/]/).pop() ?? "";
   if (base.startsWith("powershell") || base.startsWith("pwsh")) {
@@ -537,7 +545,7 @@ const bashTool: ToolDef = {
     const timeoutSec = optNum(args, "timeout") ?? (optNum(args, "timeout_ms") !== undefined ? optNum(args, "timeout_ms")! / 1000 : undefined);
     if (timeoutSec !== undefined && !(timeoutSec > 0)) throw new ToolInputError("timeout must be > 0 seconds");
     const background = optBool(args, "run_in_background");
-    const shellEnv = { ...process.env, ...ctx.env, GIT_PAGER: "cat", PAGER: "cat", GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true" };
+    const shellEnv = shellChildEnv(process.env, ctx.env);
     if (background) {
       return {
         title: `${command.length > 90 ? `${command.slice(0, 87)}…` : command} (background)`,

@@ -1,5 +1,6 @@
 /** Pure unit tests: edit engine, truncation, resources, compaction cut points. */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,7 @@ import { checkoutKey, releaseCheckoutLock, takeCheckoutLock } from "./checkout-l
 import { applyEdits, coerceEdits, EditError, withFileLock } from "./edit.js";
 import { findCut, isContextOverflow, serialize } from "./compaction.js";
 import { loadContextFiles, loadSkills, loadTemplates, substituteArgs, splitArgs } from "./resources.js";
-import { resolveToolAlias, TOOLS_BY_NAME, truncateHead, truncateTail, unsupportedArgs, type ToolContext } from "./tools.js";
+import { resolveToolAlias, shellChildEnv, TOOLS_BY_NAME, truncateHead, truncateTail, unsupportedArgs, type ToolContext } from "./tools.js";
 import type { ChatMessage } from "./llm.js";
 import { detectFeedback } from "./feedback.js";
 import { parseInterpretation } from "./sentiment.js";
@@ -483,6 +484,22 @@ console.log("ok templates");
   assert.equal(blocked.ok, false, "a live other pid keeps the checkout");
   if (!blocked.ok) assert.equal(blocked.holder.pid, deadPid);
   console.log("ok checkout lock refuses a live other process");
+}
+
+// ---- bash children do not inherit the parent trace (I-20261002-1ae8)
+{
+  const env = shellChildEnv({ ...process.env, VDOM_TRACE: "parent.ndjson", VDOM_TRACE_FULL: "1" }, { VDOM_SESSION: "s" });
+  assert.equal(env.VDOM_TRACE, undefined);
+  assert.equal(env.VDOM_TRACE_FULL, undefined);
+  assert.equal(env.VDOM_SESSION, "s", "session env still reaches the child");
+  assert.equal(env.GIT_PAGER, "cat");
+  const r = spawnSync(process.execPath, ["-e", "process.stdout.write((process.env.VDOM_TRACE ?? '') + '|' + (process.env.VDOM_TRACE_FULL ?? ''))"], {
+    env,
+    encoding: "utf8",
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "|", "a child process must not see the parent trace path");
+  console.log("ok shell children do not inherit VDOM_TRACE");
 }
 
 console.log("unit selftest passed");
