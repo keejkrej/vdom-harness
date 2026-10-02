@@ -4,6 +4,8 @@ import type { ApprovePolicy } from "./client.js";
 /** Options for `vdom run` / `vdom client` (driving an agent over ACP). */
 export type DriveFlags = {
   prompts: string[];
+  /** Prompt sources (`--prompt-file <path>`, `-` = stdin): read when the command runs. */
+  promptSources: string[];
   session?: string;
   continueLast: boolean;
   mode?: string;
@@ -42,10 +44,22 @@ export type Parsed = {
   ops: { repo?: string; ref?: string; repro: string[]; since?: string; promote: boolean; force: boolean; faults: boolean };
 };
 
+/**
+ * cmd.exe (and shells in its family) re-parse batch arguments and stop at the
+ * first raw newline, so a multi-line prompt passed to vdom.cmd arrives as its
+ * first line only. Detect the shapes that suggest that happened: an odd number
+ * of ASCII double quotes or a lone `<`/`>` that no longer closes.
+ */
+export function looksTruncated(prompt: string): boolean {
+  const quotes = (prompt.match(/"/g) ?? []).length;
+  if (quotes % 2 === 1) return true;
+  return false;
+}
+
 export function parseArgs(argv: string[]): Parsed {
   const overrides: ConfigOverrides = {};
   const positional: string[] = [];
-  const drive: DriveFlags = { prompts: [], continueLast: false, showThinking: false, verbose: false };
+  const drive: DriveFlags = { prompts: [], promptSources: [], continueLast: false, showThinking: false, verbose: false };
   const issue: IssueFlags = { files: [] };
   let cwd: string | undefined;
   let json = false;
@@ -99,6 +113,11 @@ export function parseArgs(argv: string[]): Parsed {
       case "--prompt":
         drive.prompts.push(next());
         break;
+      case "--prompt-file": {
+        const v = next();
+        if (!drive.promptSources.includes(v)) drive.promptSources.push(v);
+        break;
+      }
       case "--session":
       case "-s":
         drive.session = next();

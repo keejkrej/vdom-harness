@@ -13,7 +13,7 @@ process.env.VDOM_HOME = home;
 const { loadConfig } = await import("./config.js");
 const { initEnv, loadEnv, rollback, describeEnv } = await import("./envs.js");
 const { fixIssue } = await import("./fix.js");
-const { fileIssue, loadIssue } = await import("./issues.js");
+const { fileIssue, listIssues, loadIssue } = await import("./issues.js");
 
 const git = (cwd: string, ...args: string[]) => {
   const r = spawnSync("git", args, { cwd, encoding: "utf8" });
@@ -24,6 +24,30 @@ const git = (cwd: string, ...args: string[]) => {
 // Toy harness: lib.js has a bug; `npm test` runs every test/*.js.
 const repo = mkdtempSync(join(tmpdir(), "vdom-toyrepo-"));
 mkdirSync(join(repo, "test"));
+mkdirSync(join(repo, "dist", "acp"), { recursive: true });
+// The toy CLI mirrors the real entry point's argv handling so the shim can be
+// tested end to end: positional text survives verbatim, --prompt-file is read.
+writeFileSync(
+  join(repo, "dist", "acp", "cli.js"),
+  [
+    "import fs from 'node:fs';",
+    "const argv = process.argv.slice(2);",
+    "const cmd = argv.shift();",
+    "if (cmd === 'acp') process.exit(0);",
+    "let prompts = [];",
+    "while (argv.length) {",
+    "  const a = argv.shift();",
+    "  if (a === '-p' || a === '--prompt') prompts.push(argv.shift());",
+    "  else if (a === '--prompt-file') {",
+    "    const src = argv.shift();",
+    "    prompts.push(src === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(src, 'utf8'));",
+    "  } else prompts.push(a);",
+    "}",
+    "console.log(JSON.stringify(prompts));",
+    "process.exit(0);",
+    "",
+  ].join("\n"),
+);
 writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "toy", version: "1.0.0", type: "module", scripts: { build: "node -e \"0\"", test: "node test/run.js" } }));
 writeFileSync(join(repo, "package-lock.json"), JSON.stringify({ name: "toy", version: "1.0.0", lockfileVersion: 3, requires: true, packages: { "": { name: "toy", version: "1.0.0" } } }));
 writeFileSync(join(repo, "lib.js"), "export const clamp = (x, lo, hi) => Math.max(lo, x);\n");
@@ -38,8 +62,44 @@ git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base");
 
 initEnv({ repo });
 const env0 = loadEnv()!;
-assert.ok(existsSync(join(home, "bin", process.platform === "win32" ? "vdom.cmd" : "vdom")));
+const shim = join(home, "bin", process.platform === "win32" ? "vdom.cmd" : "vdom");
+assert.ok(existsSync(shim));
 console.log("ok env init (prod worktree + shim)");
+
+// 0. The shim must pass a multi-line prompt argument through verbatim.
+// Regression (I-20261002-ea84): cmd.exe re-parses `%*` and cuts an argument at
+// the first newline, so a two-line prompt reached the agent as its first line
+// only. Run the shim with a multi-line prompt and check what the CLI received.
+{
+  const brief = "Line one: build the router.\nLine two: keep the ladder cheap-first.";
+  const r = spawnSync(shim, ["client", "--cwd", repo, "-p", brief], {
+    encoding: "utf8",
+    ...(process.platform === "win32" ? { shell: true } : {}),
+  });
+  assert.equal(r.status, 0, `shim run failed: ${r.stdout}\n${r.stderr}`);
+  const received = JSON.parse(r.stdout.trim()) as string[];
+  assert.equal(received.at(-1), brief, `the multi-line prompt must survive the shim verbatim, got: ${JSON.stringify(received)}`);
+  console.log("ok shim passes multi-line prompt arguments verbatim");
+}
+
+// 0b. `--prompt-file` (and `-` for stdin) keep newlines regardless of the shell.
+{
+  const briefFile = join(home, "brief.txt");
+  writeFileSync(briefFile, "From the file: route by cost.\nSecond line.\n");
+  const run = (args: string[], input?: string) =>
+    spawnSync(shim, args, {
+      encoding: "utf8",
+      ...(input !== undefined ? { input } : {}),
+      ...(process.platform === "win32" ? { shell: true } : {}),
+    });
+  const r = run(["client", "--cwd", repo, "--prompt-file", briefFile]);
+  assert.equal(r.status, 0, `prompt-file run failed: ${r.stdout}\n${r.stderr}`);
+  assert.match((JSON.parse(r.stdout.trim()) as string[]).at(-1)!, /From the file: route by cost\.\nSecond line\./, "file-sourced prompt keeps its newlines");
+  const r2 = run(["client", "--cwd", repo, "--prompt-file", "-"], "Piped stdin line one.\nLine two.\n");
+  assert.equal(r2.status, 0, `stdin prompt run failed: ${r2.stdout}\n${r2.stderr}`);
+  assert.equal((JSON.parse(r2.stdout.trim()) as string[]).at(-1), "Piped stdin line one.\nLine two.\n", "stdin-sourced prompt keeps its newlines");
+  console.log("ok --prompt-file and stdin prompts keep newlines");
+}
 
 const cfg = loadConfig();
 const newIssue = (title: string) =>

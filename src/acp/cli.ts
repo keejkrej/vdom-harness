@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Readable, Writable } from "node:stream";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   AgentSideConnection,
@@ -10,7 +11,7 @@ import {
   type Stream,
 } from "@agentclientprotocol/sdk";
 import { loadConfig, vdomHome, type AgentConfig } from "./config.js";
-import { parseArgs, splitCommand, type Parsed } from "./cli-args.js";
+import { looksTruncated, parseArgs, splitCommand, type Parsed } from "./cli-args.js";
 import { drive, spawnAgent, type DriveOptions } from "./client.js";
 import { AGENT_VERSION, VdomAgent } from "./agent.js";
 import { listModels, streamChat } from "./llm.js";
@@ -232,6 +233,18 @@ function driveOptions(p: Parsed, cwd: string, prompts: string[]): DriveOptions {
   };
 }
 
+/** Read `--prompt-file` sources: `<path>` reads the file, `-` reads all of stdin. */
+function resolvePromptSources(sources: string[]): string[] {
+  const out: string[] = [];
+  for (const src of sources) {
+    if (src === "-") {
+      if (process.stdin.isTTY) throw new Error("--prompt-file - expects the prompt on stdin, but stdin is a TTY");
+      out.push(readFileSync(0, "utf8"));
+    } else out.push(readFileSync(src, "utf8"));
+  }
+  return out;
+}
+
 /** `vdom run`: drive an in-process agent through a real ACP connection. */
 async function runInProcess(cfg: AgentConfig, opts: DriveOptions): Promise<number> {
   if (opts.trace) process.env.VDOM_TRACE ??= `${opts.trace}.agent.ndjson`;
@@ -312,10 +325,15 @@ export async function main(argv = process.argv.slice(2)): Promise<number | undef
       return undefined;
     case "run":
     case "client": {
-      const prompts = [...(p.positional.length ? [p.positional.join(" ")] : []), ...p.drive.prompts].filter((x) => x.trim());
+      const prompts = [...(p.positional.length ? [p.positional.join(" ")] : []), ...p.drive.prompts, ...resolvePromptSources(p.drive.promptSources)].filter((x) => x.trim());
       if (!prompts.length) {
-        process.stderr.write(`usage: vdom ${p.command} "<prompt>" [-p "<next prompt>"…] [--cwd dir] [--session id | -c]\n`);
+        process.stderr.write(`usage: vdom ${p.command} "<prompt>" [-p "<next prompt>"…] [--prompt-file <path>|-] [--cwd dir] [--session id | -c]\n`);
         return 2;
+      }
+      for (const prompt of prompts) {
+        // cmd.exe-style shells cut an argument at the first newline; a prompt that
+        // looks like it lost its tail deserves a warning, not silence.
+        if (looksTruncated(prompt)) process.stderr.write("vdom: warning: prompt looks truncated (unbalanced quotes); multi-line prompts passed via vdom.cmd can lose everything after the first newline — prefer --prompt-file <path> or - for stdin\n");
       }
       const opts = driveOptions(p, resolve(p.cwd ?? process.cwd()), prompts);
       return p.command === "run" ? runInProcess(cfg, opts) : runClient(p, opts);

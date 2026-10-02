@@ -11,6 +11,7 @@ import type { ChatMessage } from "./llm.js";
 import { detectFeedback } from "./feedback.js";
 import { parseInterpretation } from "./sentiment.js";
 import { ModelRouter, parseLadder, bucketKey, classifyRequest, describeStats, isHarnessCheckout } from "./routing.js";
+import { looksTruncated, parseArgs } from "./cli-args.js";
 import { parseJsonObject } from "./agent.js";
 import { analyze, EventLog, readEvents, renderMarkdown } from "./history.js";
 
@@ -412,6 +413,22 @@ console.log("ok templates");
   assert.equal(r.newState("mid", { position: 2, hold: 0, prevClean: true }).position, 1, "a stale saved position falls back to the model's rung");
   assert.equal(r.newState("gpt-9", { position: 1, hold: 0, prevClean: true }).active, false, "off-ladder model stands routing down even with saved state");
   console.log("ok routing: resume persistence");
+}
+
+// ---- cli-args: --prompt-file sources and truncation heuristic (vdom.cmd cuts multi-line prompts)
+{
+  const p1 = parseArgs(["client", "--cwd", "/x", "--prompt-file", "brief.txt"]);
+  assert.deepEqual(p1.drive.promptSources, ["brief.txt"]);
+  assert.deepEqual(p1.drive.prompts, []);
+  const p2 = parseArgs(["-p", "first", "--prompt-file", "-"]);
+  assert.deepEqual(p2.drive.promptSources, ["-"], "a second --prompt-file - is not deduped away");
+  assert.deepEqual(p2.drive.prompts, ["first"]);
+  // A prompt that arrives as its first line only (the cmd.exe truncation shape) is flagged.
+  assert.equal(looksTruncated('Build the {"path": "a.json spec'), true, "odd quote count = truncated shape");
+  assert.equal(looksTruncated('Line one\nLine two ends with a period.'), false);
+  assert.equal(looksTruncated("all fine, no quotes"), false);
+  assert.equal(parseArgs(["-p", "multi\nline"]).drive.prompts[0], "multi\nline", "parseArgs itself never cuts argv");
+  console.log("ok cli-args: --prompt-file + looksTruncated");
 }
 
 console.log("unit selftest passed");
