@@ -12,6 +12,7 @@ import { detectFeedback } from "./feedback.js";
 import { parseInterpretation } from "./sentiment.js";
 import { ModelRouter, parseLadder, bucketKey, classifyRequest, describeStats, isHarnessCheckout } from "./routing.js";
 import { looksTruncated, parseArgs } from "./cli-args.js";
+import { loadConfig } from "./config.js"; // regression I-20261002-2be2: list values as strings
 import { parseJsonObject } from "./agent.js";
 import { analyze, EventLog, readEvents, renderMarkdown } from "./history.js";
 
@@ -429,6 +430,36 @@ console.log("ok templates");
   assert.equal(looksTruncated("all fine, no quotes"), false);
   assert.equal(parseArgs(["-p", "multi\nline"]).drive.prompts[0], "multi\nline", "parseArgs itself never cuts argv");
   console.log("ok cli-args: --prompt-file + looksTruncated");
+}
+
+// ---- config: model lists accept strings like the CLI flag does (I-20261002-2be2)
+{
+  const dir = mkdtempSync(join(tmpdir(), "vdom-cfg-"));
+  // Same shape as --ladder / VDOM_ROUTE_LADDER, the natural way to write it.
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ routeLadder: "glm-5.3-flash,glm-5.3", models: "a,b" }));
+  const cfg = loadConfig({ configPath: join(dir, "config.json") });
+  assert.deepEqual(cfg.routeLadder, ["glm-5.3-flash", "glm-5.3"], "routeLadder string is parsed like the CLI flag");
+  assert.deepEqual(cfg.models, ["a", "b"], "models string is parsed like VDOM_MODELS");
+  // Arrays pass through, with blanks and duplicates dropped.
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ routeLadder: ["cheap", "cheap", "", "big"] }));
+  const cfg2 = loadConfig({ configPath: join(dir, "config.json") });
+  assert.deepEqual(cfg2.routeLadder, ["cheap", "big"]);
+  // A non-list type is reported with the key name, not silently kept.
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ routeLadder: 42 }));
+  const origWrite = process.stderr.write.bind(process.stderr);
+  let warned = "";
+  process.stderr.write = (chunk: unknown) => {
+    warned += String(chunk);
+    return true;
+  };
+  try {
+    const cfg3 = loadConfig({ configPath: join(dir, "config.json") });
+    assert.deepEqual(cfg3.routeLadder, [], "a wrongly-typed value falls back to routing off, not a crash");
+  } finally {
+    process.stderr.write = origWrite;
+  }
+  assert.match(warned, /routeLadder/, "the warning names the offending key");
+  console.log("ok config: list values accept strings");
 }
 
 console.log("unit selftest passed");

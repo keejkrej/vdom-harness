@@ -69,6 +69,23 @@ function env(name: string): string | undefined {
   return v && v.length > 0 ? v : undefined;
 }
 
+/** Coerce a config list that may be written as a comma string (like the CLI flag) into a list of ids. */
+function listValue(name: string, v: unknown): string[] | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v === "string") return v.split(",").map((s) => s.trim()).filter(Boolean);
+  if (Array.isArray(v) && v.every((x) => typeof x === "string")) {
+    const arr = v as string[];
+    return arr.map((s) => s.trim()).filter(Boolean);
+  }
+  process.stderr.write(`vdom: config key "${name}" must be a string or a string array; ignoring it\n`);
+  return undefined;
+}
+
+/** Apply parseLadder's dedupe to an already-list-shaped value (null → undefined, so later sources win). */
+function parseLadderFromList(v: string[] | undefined): string[] | undefined {
+  return v === undefined ? undefined : [...new Set(v)];
+}
+
 function defaultShell(): string {
   if (env("VDOM_SHELL")) return env("VDOM_SHELL")!;
   if (process.platform !== "win32") return env("SHELL") ?? "/bin/bash";
@@ -135,7 +152,7 @@ export function loadConfig(overrides: ConfigOverrides = {}): AgentConfig {
   const apiKey = overrides.apiKey ?? (vdomEnv ? fromEnv.apiKey : undefined) ?? fileKey ?? (fromEnv.baseUrl === baseUrl ? fromEnv.apiKey : undefined);
   const model =
     overrides.model ?? env("VDOM_MODEL") ?? file.model ?? (fileWins ? undefined : fromEnv.model) ?? (baseUrl.includes("ollama.com") ? OLLAMA_CLOUD_DEFAULT_MODEL : "gpt-oss:20b");
-  const models = overrides.models ?? (env("VDOM_MODELS")?.split(",").map((s) => s.trim()).filter(Boolean)) ?? file.models ?? [];
+  const models = overrides.models ?? (env("VDOM_MODELS")?.split(",").map((s) => s.trim()).filter(Boolean)) ?? listValue("models", file.models) ?? [];
   const headers: Record<string, string> = { ...(file.headers ?? {}) };
   if (baseUrl.includes("openrouter.ai")) {
     headers["HTTP-Referer"] ??= "https://github.com/keejkrej/vdom-harness";
@@ -173,7 +190,8 @@ export function loadConfig(overrides: ConfigOverrides = {}): AgentConfig {
         overrides.routeLadder ??
         (env("VDOM_ROUTING") === "off" ? [] : undefined) ??
         (env("VDOM_ROUTE_LADDER") ? parseLadder(env("VDOM_ROUTE_LADDER")!) : undefined) ??
-        (env("VDOM_ROUTING") === "off" ? [] : file.routeLadder ?? []);
+        parseLadderFromList(listValue("routeLadder", file.routeLadder)) ??
+        [];
       return v;
     })(),
   };
