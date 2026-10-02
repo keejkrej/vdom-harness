@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { Readable, Writable } from "node:stream";
@@ -44,6 +44,8 @@ export type DriveOptions = {
   /** Cancel a prompt that runs longer than this. */
   timeoutSec?: number;
   mcpServers?: McpServer[];
+  /** Called once the session is established and the first prompt is about to go out. */
+  onReady?: () => void;
 };
 
 const DIM = "\x1b[2m";
@@ -66,10 +68,28 @@ function tee(stream: Stream, file: string): Stream {
 export function spawnAgent(cmd: string[], cwd: string, env: NodeJS.ProcessEnv): { stream: Stream; kill(): void; exited: Promise<number | null> } {
   const [bin, ...args] = cmd;
   if (!bin) throw new Error("empty agent command");
-  const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "inherit"], shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(bin), windowsHide: true });
+  const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "inherit"], detached: process.platform !== "win32", shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(bin), windowsHide: true });
   const exited = new Promise<number | null>((r) => child.on("close", (code) => r(code)));
   const stream = ndJsonStream(Writable.toWeb(child.stdin!) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout!) as ReadableStream<Uint8Array>);
-  return { stream, exited, kill: () => child.kill() };
+  // Killing only the direct child leaves the agent's own children (shells it
+  // spawned, background jobs) running to edit files after a stopped run
+  // (I-20261002-7e86). Take the whole process tree down instead: taskkill /T
+  // on Windows, the process group on POSIX (see tools.ts killTree).
+  const kill = () => {
+    if (child.exitCode !== null) return;
+    try {
+      // Synchronous on purpose: the client may exit the moment kill() returns
+      // (e.g. its own stdin closed), and a fire-and-forget taskkill is itself a
+      // child of this dying process — it gets torn down before finishing its
+      // sweep. tools.ts can spawn; here the caller is usually exiting.
+      if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      else process.kill(-child.pid!, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    child.kill();
+  };
+  return { stream, exited, kill };
 }
 
 function contentText(c: ToolCallContent[] | null | undefined, max: number): string {
@@ -217,6 +237,7 @@ export async function drive(stream: Stream, opts: DriveOptions): Promise<{ stopR
   if (opts.model) await conn.setSessionConfigOption({ sessionId: sid, configId: "model", value: opts.model });
   if (opts.mode) await conn.setSessionConfigOption({ sessionId: sid, configId: "mode", value: opts.mode });
   if (opts.thought) await conn.setSessionConfigOption({ sessionId: sid, configId: "thought_level", value: opts.thought });
+  opts.onReady?.();
 
   const stopReasons: string[] = [];
   const onSigint = () => void conn.cancel({ sessionId: sid });

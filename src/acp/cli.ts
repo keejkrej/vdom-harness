@@ -274,11 +274,38 @@ async function runClient(p: Parsed, opts: DriveOptions): Promise<number> {
   }
   const env = { ...process.env, ...(opts.trace ? { VDOM_TRACE: `${opts.trace}.agent.ndjson` } : {}) };
   const agent = spawnAgent(cmd, opts.cwd, env);
+  // A killed or abandoned client must not leave its agent process tree
+  // running to edit files concurrently with the next run (I-20261002-7e86):
+  // kill the tree when our stdin closes (driving shell died — Windows cannot
+  // deliver signals), on SIGTERM/SIGHUP where they exist, and on normal exit.
+  // stdin is watched only after the session is ready: fire-and-forget drivers
+  // (spawnSync with no input, cron) hand us an already-closed stdin, and that
+  // must not kill a run that was started deliberately.
+  let done = false;
+  const stop = () => {
+    if (done) return;
+    done = true;
+    agent.kill();
+  };
+  const onHup = () => stop();
+  const onTerm = () => {
+    stop();
+    process.exitCode = 143;
+  };
+  process.on("SIGTERM", onTerm);
+  process.on("SIGHUP", onHup);
+  const onStdinClosed = () => stop();
+  process.stdin.on("end", onStdinClosed);
+  process.stdin.on("close", onStdinClosed);
   try {
-    const r = await drive(agent.stream, opts);
+    const r = await drive(agent.stream, { ...opts, onReady: () => process.stdin.resume() });
     return r.stopReasons.every((x) => x === "end_turn") ? 0 : 1;
   } finally {
-    agent.kill();
+    stop();
+    process.stdin.off("end", onStdinClosed);
+    process.stdin.off("close", onStdinClosed);
+    process.off("SIGTERM", onTerm);
+    process.off("SIGHUP", onHup);
   }
 }
 

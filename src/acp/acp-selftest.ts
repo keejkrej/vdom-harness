@@ -4,8 +4,8 @@
  * No network, no API key.
  */
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,7 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { repairToolPairs } from "./agent.js";
+import { spawnAgent } from "./client.js";
 import { parseArgs } from "./cli-args.js";
 import { SUMMARY_PREFIX } from "./compaction.js";
 import type { ChatMessage } from "./llm.js";
@@ -714,6 +715,126 @@ async function main(): Promise<void> {
     assert.equal(requests.at(-1)!.model, "mock-big", "the manually picked model serves");
     assert.equal(requests.length, manualReqs + 1, "no ladder step-up requests");
     console.log("ok routing: stats persist; manual pick stands routing down");
+
+    // ---- client teardown kills the spawned agent's whole process tree (I-20261002-7e86)
+    // A stopped `vdom client` run must not leave its spawned ACP agent — and that
+    // agent's own children — running to edit files concurrently with the next run
+    // (root cause of I-20261002-cf19). The tree-agent fixture spawns a grandchild
+    // that heartbeats a file every 500ms and never finishes its turn, so it is
+    // provably mid-turn and provably alive when the client is torn down.
+    {
+      const marker = join(home, "tree-marker.json");
+      const heartbeat = join(home, "tree-heartbeat.txt");
+      // Plain JS fixture on purpose: it runs under bare `node` with the temp
+      // workspace as cwd, so no TypeScript loader may be required.
+      const agent = [process.execPath, join(here, "fixtures", "tree-agent.mjs")].map((x) => JSON.stringify(x)).join(" ");
+      const treeEnv = { ...env, VDOM_TREE_MARKER: marker, VDOM_TREE_HEARTBEAT: heartbeat };
+      type TreeInfo = { agent: number; grandchild: number; prompted?: boolean };
+
+      const spawnClient = () =>
+        spawn(process.execPath, ["--import", "tsx", join(here, "cli.ts"), "client", "--cwd", ws, "--agent", agent, "-V", "spawn the daemon"], {
+          env: treeEnv,
+          stdio: ["pipe", "pipe", "inherit"],
+          windowsHide: true,
+        });
+      const info = (): TreeInfo | undefined => {
+        try {
+          return JSON.parse(readFileSync(marker, "utf8")) as TreeInfo;
+        } catch {
+          return undefined;
+        }
+      };
+      // The client's prompt is in flight once the fixture has acknowledged it.
+      const waitMidTurn = async (ms: number) => {
+        for (let i = 0; i < ms / 100; i++) {
+          if (info()?.prompted) return true;
+          await sleep(100);
+        }
+        return false;
+      };
+      // Liveness probe without trusting pids: the grandchild appends to the
+      // heartbeat file every 500ms while alive. Dead ⟺ size unchanged across
+      // two samples 1200ms apart (a live grandchild can never skip two beats).
+      const beatSize = () => (existsSync(heartbeat) ? statSync(heartbeat).size : 0);
+      const waitHeartbeat = async (ms: number) => {
+        for (let i = 0; i < ms / 100 && beatSize() === 0; i++) await sleep(100);
+        return beatSize() > 0;
+      };
+      const heartbeatStopped = async () => {
+        const a = beatSize();
+        await sleep(1200);
+        return beatSize() === a;
+      };
+      const waitTreeDead = async (ms: number) => {
+        if (beatSize() === 0) return true; // nothing ever started
+        for (let i = 0; i < ms / 1200; i++) if (await heartbeatStopped()) return true;
+        return false;
+      };
+      // Belt and braces on failure: kill by the pids the fixture reported, so a
+      // red assertion never leaks the tree onto the machine.
+      const killStray = (client?: ChildProcess) => {
+        try {
+          client?.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+        const t = info();
+        for (const pid of [t?.agent, t?.grandchild]) {
+          if (!pid) continue;
+          try {
+            if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+            else process.kill(pid, "SIGKILL");
+          } catch {
+            /* already gone */
+          }
+        }
+      };
+
+      let client: ChildProcess | undefined;
+      try {
+        // Leg 1: the client's stdin closes (its driving shell died — editor
+        // crash, closed tab). The client must exit and take the whole agent
+        // tree with it.
+        client = spawnClient();
+        assert.ok(await waitMidTurn(30_000), "fixture agent should be mid-turn (prompt acknowledged)");
+        assert.ok(await waitHeartbeat(10_000), "grandchild should be heartbeating before the kill");
+        client.stdin!.end();
+        const leg1Exit = new Promise<number | null>((r) => client!.on("exit", (c) => r(c)));
+        assert.notEqual(await Promise.race([leg1Exit, new Promise<number | null>((r) => setTimeout(() => r(null), 20_000))]), null, "vdom client must exit when its stdin closes");
+        client = undefined;
+        assert.ok(await waitTreeDead(15_000), "heartbeat still growing 15s after the client died on stdin close: the agent process tree was not killed");
+        console.log("ok client kills the agent tree on stdin close");
+
+        // Leg 2: SIGTERM where the platform delivers it (POSIX drivers ctrl-c /
+        // terminate the client). Windows cannot deliver signals, so the
+        // hard-kill case is covered by legs 1 and 3.
+        if (process.platform !== "win32") {
+          client = spawnClient();
+          assert.ok(await waitMidTurn(30_000), "fixture agent mid-turn (SIGTERM leg)");
+          assert.ok(await waitHeartbeat(10_000), "grandchild heartbeating (SIGTERM leg)");
+          client.kill("SIGTERM");
+          const leg2Exit = new Promise<number | null>((r) => client!.on("exit", (c) => r(c)));
+          assert.notEqual(await Promise.race([leg2Exit, new Promise<number | null>((r) => setTimeout(() => r(null), 20_000))]), null, "vdom client must exit on SIGTERM");
+          client = undefined;
+          assert.ok(await waitTreeDead(15_000), "heartbeat still growing after SIGTERM: the agent process tree was not killed");
+          console.log("ok client kills the agent tree on SIGTERM");
+        }
+
+        // Leg 3: spawnAgent().kill() must kill the whole tree — the unit the
+        // client's exit handlers call. On Windows this pins taskkill /T /F: a
+        // bare child.kill() is one TerminateProcess and leaves the detached
+        // grandchild running (exactly the I-20261002-cf19 repro).
+        const spawned = spawnAgent([process.execPath, join(here, "fixtures", "tree-agent.mjs")], ws, treeEnv);
+        assert.ok(await waitHeartbeat(15_000), "grandchild heartbeating (spawnAgent kill leg)");
+        spawned.kill();
+        assert.ok(await waitTreeDead(15_000), "spawnAgent.kill() must kill the whole process tree, not just the direct child");
+        console.log("ok spawnAgent.kill() kills the whole process tree");
+      } finally {
+        killStray(client);
+        rmSync(marker, { force: true });
+        rmSync(heartbeat, { force: true });
+      }
+    }
   } finally {
     h.child.kill();
     server.close();
