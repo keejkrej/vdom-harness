@@ -64,7 +64,7 @@ import { analyze, EventLog, readEvents, renderMarkdown, type HistoryEvent } from
 import { detectFeedback, type FeedbackSignal } from "./feedback.js";
 import { interpret, type Interpretation, type TurnDigest } from "./sentiment.js";
 import { fileIssue, type Issue } from "./issues.js";
-import { JobManager, resolveToolAlias, TOOLS, TOOLS_BY_NAME, ToolInputError, type Access, type Prepared, type ToolContext, type ToolDef, type ToolImage } from "./tools.js";
+import { JobManager, resolveToolAlias, TOOLS, TOOLS_BY_NAME, ToolInputError, unsupportedArgs, type Access, type Prepared, type ToolContext, type ToolDef, type ToolImage } from "./tools.js";
 
 export const AGENT_NAME = "vdom";
 export const AGENT_VERSION = "0.3.0";
@@ -862,6 +862,22 @@ export class VdomAgent implements Agent {
     }
     if (def.access === "mcp" || name.startsWith("mcp__")) live.log.append("tool.call", { toolCallId: id, name, kind: def.kind, arguments: args }, { who });
 
+    // Reject arguments the tool's schema does not define (and so would silently drop),
+    // so the model gets a signal instead of believing it saw what it asked for.
+    if (def.access !== "mcp") {
+      const builtin = TOOLS_BY_NAME.get(name);
+      if (builtin) {
+        const unknown = unsupportedArgs(builtin, args);
+        if (unknown.length) {
+          const supported = Object.keys((builtin.schema.parameters as { properties?: Record<string, unknown> }).properties ?? {});
+          const msg = `Error: ${name} received unsupported argument${unknown.length > 1 ? "s" : ""} ${unknown.map((k) => `\`${k}\``).join(", ")}. Supported arguments: ${supported.join(", ") || "(none)"}.`;
+          await emit({ sessionUpdate: "tool_call_update", toolCallId: id, status: "failed", content: [textContent(msg)] });
+          record("error", msg, { type: "input", message: msg });
+          return { output: msg };
+        }
+      }
+    }
+
     child?.onActivity(prepared.title);
     await emit({
       sessionUpdate: "tool_call",
@@ -1338,19 +1354,9 @@ function errorInfo(err: unknown): { type: string; message: string; stack?: strin
   return { type: "exception", message, ...(err instanceof Error && err.stack ? { stack: clip(err.stack, 3000) } : {}) };
 }
 
-/** Argument aliases tools accept on purpose (not "ignored"). */
-const ARG_ALIASES: Record<string, string[]> = {
-  edit: ["oldText", "newText", "old_string", "new_string"],
-  grep: ["ignore_case", "max_results"],
-  find: ["max_results"],
-  bash: ["timeout_ms", "description"],
-};
-
 /** Arguments the model sent that the tool's schema does not define (silently dropped by the tool). */
 function ignoredArgs(def: ToolDef, args: Record<string, unknown>): string[] {
-  const props = (def.schema.parameters as { properties?: Record<string, unknown> }).properties ?? {};
-  const ok = new Set([...Object.keys(props), ...(ARG_ALIASES[def.schema.name] ?? [])]);
-  return Object.keys(args).filter((k) => !ok.has(k));
+  return unsupportedArgs(def, args);
 }
 
 /** Repository root of the running vdom harness (src/acp or dist/acp → ../..). */

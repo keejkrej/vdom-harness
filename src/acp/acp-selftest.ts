@@ -270,6 +270,19 @@ async function main(): Promise<void> {
     assert.match(toolResults().at(-1)!, /there is no `search` tool; this ran `grep`/);
     console.log("ok tool alias (search → grep)");
 
+    // ---- read accepts line_start/line_end as offset/limit aliases instead of ignoring them
+    script.push({ calls: [{ name: "read", args: { path: "app.txt", line_start: 2, line_end: 3 } }] }, { text: "read it" });
+    await h.conn.prompt({ sessionId: sid, prompt: [{ type: "text", text: "show lines 2-3 of app.txt" }] });
+    assert.equal(toolResults().at(-1), "beta\nGAMMA");
+    console.log("ok read line_start/line_end aliases (e2e)");
+
+    // ---- a truly unknown argument is rejected, not silently dropped
+    script.push({ calls: [{ name: "read", args: { path: "app.txt", frobnicate: true } }] }, { text: "ok" });
+    await h.conn.prompt({ sessionId: sid, prompt: [{ type: "text", text: "read weirdly" }] });
+    assert.match(toolResults().at(-1)!, /unsupported argument `frobnicate`/);
+    assert.match(toolResults().at(-1)!, /Supported arguments: path, offset, limit/);
+    console.log("ok unknown tool argument rejected");
+
     // ---- an empty response is retried, not taken as "done"
     script.push({ text: "" }, { text: "recovered from empty" });
     r = await h.conn.prompt({ sessionId: sid, prompt: [{ type: "text", text: "go on" }] });

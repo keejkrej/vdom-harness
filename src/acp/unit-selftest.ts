@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { applyEdits, coerceEdits, EditError, withFileLock } from "./edit.js";
 import { findCut, isContextOverflow, serialize } from "./compaction.js";
 import { loadContextFiles, loadSkills, loadTemplates, substituteArgs, splitArgs } from "./resources.js";
-import { resolveToolAlias, truncateHead, truncateTail } from "./tools.js";
+import { resolveToolAlias, TOOLS_BY_NAME, truncateHead, truncateTail, unsupportedArgs, type ToolContext } from "./tools.js";
 import type { ChatMessage } from "./llm.js";
 import { detectFeedback } from "./feedback.js";
 import { parseInterpretation } from "./sentiment.js";
@@ -198,6 +198,22 @@ console.log("ok templates");
   const big = log.blob("x".repeat(40_000));
   assert.ok(big.blobRef && big.preview.length < 10_000);
   console.log("ok event log / analyzer / renderer");
+}
+
+// ---- read maps line_start/line_end to offset/limit; unknown args are not silently ignored
+{
+  const readTool = TOOLS_BY_NAME.get("read")!;
+  // line_start/line_end are documented aliases, so they are not "unsupported".
+  assert.deepEqual(unsupportedArgs(readTool, { path: "x.txt", line_start: 2, line_end: 3 }), []);
+  // genuinely unknown arguments are reported, not dropped.
+  assert.deepEqual(unsupportedArgs(readTool, { path: "x.txt", bogus: 1 }), ["bogus"]);
+  const dir = mkdtempSync(join(tmpdir(), "vdom-read-"));
+  writeFileSync(join(dir, "x.txt"), "one\ntwo\nthree\n");
+  const ctx = { cwd: dir } as ToolContext;
+  const prepared = await readTool.prepare({ path: "x.txt", line_start: 2, line_end: 3 }, ctx);
+  const out = await prepared.execute();
+  assert.equal(out.output, "two\nthree");
+  console.log("ok read line_start/line_end aliases");
 }
 
 // ---- habitual tool names map onto real tools (gpt-oss reaches for `search`)

@@ -62,6 +62,8 @@ export type ToolDef = {
   snippet: string;
   /** Usage rules for the system prompt. */
   guidelines?: string[];
+  /** Extra argument keys the tool accepts on purpose beyond its schema (legacy aliases like timeout_ms, old_string). */
+  argAliases?: string[];
   prepare(args: Record<string, unknown>, ctx: ToolContext): Promise<Prepared>;
 };
 
@@ -90,6 +92,13 @@ function optNum(args: Record<string, unknown>, key: string): number | undefined 
 function optBool(args: Record<string, unknown>, key: string): boolean {
   const v = args[key];
   return v === true || v === "true";
+}
+
+/** Argument keys the model sent that the tool does not define in its schema (and so would silently drop). */
+export function unsupportedArgs(def: ToolDef, args: Record<string, unknown>): string[] {
+  const props = (def.schema.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+  const ok = new Set([...Object.keys(props), ...(def.argAliases ?? [])]);
+  return Object.keys(args).filter((k) => !ok.has(k));
 }
 
 export function resolvePath(ctx: { cwd: string }, p: string): string {
@@ -175,6 +184,7 @@ const readTool: ToolDef = {
   access: "read",
   snippet: "Read file contents",
   guidelines: ["Use read to examine files instead of cat or sed."],
+  argAliases: ["line_start", "line_end"],
   schema: {
     name: "read",
     description:
@@ -191,8 +201,11 @@ const readTool: ToolDef = {
   },
   async prepare(args, ctx) {
     const abs = resolvePath(ctx, str(args, "path"));
-    const offset = Math.max(1, Math.floor(optNum(args, "offset") ?? 1));
-    const limit = optNum(args, "limit");
+    // line_start/line_end are accepted aliases for offset/limit (some models reach for them by habit).
+    const lineStart = optNum(args, "line_start");
+    const lineEnd = optNum(args, "line_end");
+    const offset = Math.max(1, Math.floor(optNum(args, "offset") ?? lineStart ?? 1));
+    const limit = optNum(args, "limit") ?? (lineStart !== undefined && lineEnd !== undefined ? lineEnd - lineStart + 1 : undefined);
     return {
       title: `Read ${display(ctx, abs)}${offset > 1 || limit ? ` (from line ${offset})` : ""}`,
       locations: [{ path: abs, line: offset }],
@@ -304,6 +317,7 @@ const editTool: ToolDef = {
   kind: "edit",
   access: "edit",
   snippet: "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+  argAliases: ["oldText", "newText", "old_string", "new_string"],
   guidelines: [
     "Use edit for precise changes (edits[].oldText must match exactly)",
     "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
@@ -496,6 +510,7 @@ const bashTool: ToolDef = {
   kind: "execute",
   access: "exec",
   snippet: "Execute shell commands (git, gh, tests, builds, package managers)",
+  argAliases: ["timeout_ms", "description"],
   guidelines: [
     "Shell commands are non-interactive: no stdin, pagers, or editors. Each call is a fresh shell; use cwd or `cd dir && …`.",
     "You can inspect VDOM_* environment variables for the current model and session.",
@@ -634,6 +649,7 @@ const grepTool: ToolDef = {
   kind: "search",
   access: "read",
   snippet: "Search file contents for patterns (respects .gitignore)",
+  argAliases: ["ignore_case", "max_results"],
   schema: {
     name: "grep",
     description:
@@ -768,6 +784,7 @@ const findTool: ToolDef = {
   kind: "search",
   access: "read",
   snippet: "Find files by glob pattern (respects .gitignore)",
+  argAliases: ["max_results"],
   schema: {
     name: "find",
     description:
