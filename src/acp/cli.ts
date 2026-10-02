@@ -17,7 +17,7 @@ import { listModels, streamChat } from "./llm.js";
 import { SessionStore } from "./store.js";
 import { fixIssue } from "./fix.js";
 import { analyze, readEvents, renderMarkdown } from "./history.js";
-import { listIssues, loadIssue, renderIssue } from "./issues.js";
+import { fileIssue, listIssues, loadIssue, renderIssue, saveIssue } from "./issues.js";
 import { createStaging, describeEnv, dropStaging, EnvError, gateStaging, initEnv, promote, rollback } from "./envs.js";
 
 async function sessionsCommand(p: Parsed, cfg: AgentConfig): Promise<number> {
@@ -73,7 +73,42 @@ function issuesCommand(p: Parsed): number {
     process.stdout.write(`${p.json ? JSON.stringify(i, null, 2) : renderIssue(i)}\n`);
     return 0;
   }
-  process.stderr.write("usage: vdom issues [list|show <id>]\n");
+  if (sub === "new") {
+    const whatHappened = p.positional.slice(1).join(" ").trim();
+    if (!p.issue.title || !whatHappened) {
+      process.stderr.write('usage: vdom issues new --title "..." [--blame harness|model|env|unclear] [--severity high|medium|low] [--files a,b] [--repro "..."] [--fix "..."] [--session <id> --turn <n>] "what happened"...\n');
+      return 2;
+    }
+    const issue = fileIssue({
+      sessionId: p.issue.session ?? "",
+      sessionDir: "",
+      turn: p.issue.turn ?? 0,
+      signal: { source: "manual" },
+      title: p.issue.title.slice(0, 200),
+      blame: p.issue.blame ?? "unclear",
+      category: "manual",
+      whatHappened,
+      rootCause: "",
+      proposedFix: p.issue.fix ?? "",
+      files: p.issue.files,
+      repro: p.issue.repro ?? "",
+      evidence: [],
+      severity: p.issue.severity ?? "medium",
+    });
+    process.stdout.write(`${issue.id}\n`);
+    return 0;
+  }
+  if (sub === "close" && id) {
+    const i = loadIssue(id);
+    if (!i) {
+      process.stderr.write(`no issue ${id}\n`);
+      return 1;
+    }
+    saveIssue({ ...i, status: p.issue.status ?? "fixed" });
+    process.stdout.write(`${id} ${p.issue.status ?? "fixed"}\n`);
+    return 0;
+  }
+  process.stderr.write("usage: vdom issues [list|show <id>|new --title \"...\" [options] <what happened>|close <id> [--status fixed|wontfix|duplicate]]\n");
   return 2;
 }
 

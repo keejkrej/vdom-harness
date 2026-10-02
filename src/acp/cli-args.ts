@@ -17,6 +17,19 @@ export type DriveFlags = {
   agent?: string;
 };
 
+/** Flags for `vdom issues new|close`. */
+export type IssueFlags = {
+  title?: string;
+  blame?: "harness" | "model" | "env" | "unclear";
+  severity?: "high" | "medium" | "low";
+  files: string[];
+  repro?: string;
+  fix?: string;
+  session?: string;
+  turn?: number;
+  status?: "fixed" | "wontfix" | "duplicate";
+};
+
 export type Parsed = {
   command: string;
   positional: string[];
@@ -24,6 +37,7 @@ export type Parsed = {
   cwd?: string;
   json: boolean;
   drive: DriveFlags;
+  issue: IssueFlags;
   /** env / fix / inspect flags */
   ops: { repo?: string; ref?: string; repro: string[]; since?: string; promote: boolean; force: boolean; faults: boolean };
 };
@@ -32,6 +46,7 @@ export function parseArgs(argv: string[]): Parsed {
   const overrides: ConfigOverrides = {};
   const positional: string[] = [];
   const drive: DriveFlags = { prompts: [], continueLast: false, showThinking: false, verbose: false };
+  const issue: IssueFlags = { files: [] };
   let cwd: string | undefined;
   let json = false;
   const ops: Parsed["ops"] = { repro: [], promote: false, force: false, faults: false };
@@ -82,6 +97,7 @@ export function parseArgs(argv: string[]): Parsed {
       case "--session":
       case "-s":
         drive.session = next();
+        issue.session = drive.session;
         break;
       case "--continue":
       case "-c":
@@ -119,9 +135,12 @@ export function parseArgs(argv: string[]): Parsed {
       case "--ref":
         ops.ref = next();
         break;
-      case "--repro":
-        ops.repro.push(next());
+      case "--repro": {
+        const v = next();
+        ops.repro.push(v);
+        issue.repro = v;
         break;
+      }
       case "--since":
         ops.since = next();
         break;
@@ -137,6 +156,37 @@ export function parseArgs(argv: string[]): Parsed {
       case "--agent":
         drive.agent = next();
         break;
+      // `vdom issues new|close` flags.
+      case "--title":
+        issue.title = next();
+        break;
+      case "--blame": {
+        const v = next();
+        if (!["harness", "model", "env", "unclear"].includes(v)) throw new Error("--blame must be harness|model|env|unclear");
+        issue.blame = v as IssueFlags["blame"];
+        break;
+      }
+      case "--severity": {
+        const v = next();
+        if (!["high", "medium", "low"].includes(v)) throw new Error("--severity must be high|medium|low");
+        issue.severity = v as IssueFlags["severity"];
+        break;
+      }
+      case "--files":
+        issue.files = next().split(",").map((s) => s.trim()).filter(Boolean);
+        break;
+      case "--fix":
+        issue.fix = next();
+        break;
+      case "--turn":
+        issue.turn = Number(next());
+        break;
+      case "--status": {
+        const v = next();
+        if (!["fixed", "wontfix", "duplicate"].includes(v)) throw new Error("--status must be fixed|wontfix|duplicate");
+        issue.status = v as IssueFlags["status"];
+        break;
+      }
       // Accepted for drop-in compatibility; default behaviour already matches.
       case "--auto-review":
       case "--stdio":
@@ -160,7 +210,7 @@ export function parseArgs(argv: string[]): Parsed {
     positional.shift();
     command = "acp";
   }
-  return { command, positional, overrides, cwd, json, drive, ops };
+  return { command, positional, overrides, cwd, json, drive, issue, ops };
 }
 
 /** Split a command string honoring double/single quotes. */

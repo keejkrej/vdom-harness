@@ -11,7 +11,7 @@
     "prepare": "tsc",
     "demo": "tsx src/demo.ts",
     "test": "tsx src/selftest.ts && tsx src/eval/tau2-selftest.ts && npm run test:acp",
-    "test:acp": "tsx src/acp/unit-selftest.ts && tsx src/acp/env-selftest.ts && tsx src/acp/acp-selftest.ts",
+    "test:acp": "tsx src/acp/unit-selftest.ts && tsx src/acp/env-selftest.ts && tsx src/acp/acp-selftest.ts && tsx src/acp/issues-selftest.ts",
     "export": "tsx src/export-run.ts",
     "viz": "tsx src/serve.ts",
     "eval:tau2": "PYTHONPATH=python python3 -m tau2_vdom",
