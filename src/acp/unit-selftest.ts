@@ -502,4 +502,18 @@ console.log("ok templates");
   console.log("ok shell children do not inherit VDOM_TRACE");
 }
 
+// ---- grep retries an invalid regex as a fixed string (I-20261002-2ed2)
+{
+  const grep = TOOLS_BY_NAME.get("grep")!;
+  const dir = mkdtempSync(join(tmpdir(), "vdom-grep-"));
+  writeFileSync(join(dir, "call.ts"), "export function ignoredArgs(x: number) { return x; }\n");
+  const ctx = { cwd: dir, roots: [dir], signal: new AbortController().signal, env: {}, progress() {}, jobs: { start() { throw new Error("no jobs"); } } } as unknown as ToolContext;
+  const prepared = await grep.prepare({ pattern: "ignoredArgs(" }, ctx);
+  const out = await prepared.execute();
+  assert.match(out.output, /call\.ts:\d+: .*ignoredArgs\(/, "the literal call site is found");
+  assert.match(out.output, /fixed string/, "the output says the invalid regex was retried as a fixed string");
+  assert.equal(out.isError, undefined);
+  console.log("ok grep retries invalid regex as a fixed string");
+}
+
 console.log("unit selftest passed");

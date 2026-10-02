@@ -698,58 +698,75 @@ const grepTool: ToolDef = {
           }
           lines.push(l);
         };
+        // A model often greps a literal like `ignoredArgs(`; retry that once as a fixed string (I-20261002-2ed2).
+        let fixedFallback = false;
+        const escapeLiteral = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         if (hasRipgrep()) {
-          const rgArgs = ["--json", "--color=never", "--hidden", "--glob", "!.git"];
-          if (icase) rgArgs.push("--ignore-case");
-          if (literal) rgArgs.push("--fixed-strings");
-          if (context) rgArgs.push("-C", String(context));
-          if (fileGlob) rgArgs.push("--glob", fileGlob);
-          rgArgs.push("--", pattern, relTarget(ctx, target));
-          let buf = "";
-          let other = "";
-          let stopped = false;
-          let lastFile = "";
-          const stop = new AbortController();
-          type RgEvent = { type: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } };
-          const r = await runProcess("rg", rgArgs, {
-            cwd: ctx.cwd,
-            signal: AbortSignal.any([ctx.signal, stop.signal]),
-            timeoutMs: 120_000,
-            onChunk(b) {
-              if (stopped) return;
-              buf += b.toString("utf8");
-              let nl: number;
-              while ((nl = buf.indexOf("\n")) >= 0) {
-                const raw = buf.slice(0, nl);
-                buf = buf.slice(nl + 1);
-                let ev: RgEvent;
-                try {
-                  ev = JSON.parse(raw) as RgEvent;
-                } catch {
-                  other += `${raw}\n`;
-                  continue;
+          const runRg = async (fixed: boolean) => {
+            lines.length = 0;
+            matches = 0;
+            cutLines = false;
+            const rgArgs = ["--json", "--color=never", "--hidden", "--glob", "!.git"];
+            if (icase) rgArgs.push("--ignore-case");
+            if (fixed) rgArgs.push("--fixed-strings");
+            if (context) rgArgs.push("-C", String(context));
+            if (fileGlob) rgArgs.push("--glob", fileGlob);
+            rgArgs.push("--", pattern, relTarget(ctx, target));
+            let buf = "";
+            let other = "";
+            let stopped = false;
+            let lastFile = "";
+            const stop = new AbortController();
+            type RgEvent = { type: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } };
+            const r = await runProcess("rg", rgArgs, {
+              cwd: ctx.cwd,
+              signal: AbortSignal.any([ctx.signal, stop.signal]),
+              timeoutMs: 120_000,
+              onChunk(b) {
+                if (stopped) return;
+                buf += b.toString("utf8");
+                let nl: number;
+                while ((nl = buf.indexOf("\n")) >= 0) {
+                  const raw = buf.slice(0, nl);
+                  buf = buf.slice(nl + 1);
+                  let ev: RgEvent;
+                  try {
+                    ev = JSON.parse(raw) as RgEvent;
+                  } catch {
+                    other += `${raw}\n`;
+                    continue;
+                  }
+                  if (ev.type !== "match" && ev.type !== "context") continue;
+                  const file = (ev.data?.path?.text ?? "").split(sep).join("/");
+                  const lineText = (ev.data?.lines?.text ?? "").replace(/\r?\n$/, "");
+                  if (ev.type === "match" && matches >= limit) {
+                    stopped = true;
+                    stop.abort();
+                    return;
+                  }
+                  if (context && lastFile && file !== lastFile) lines.push("--");
+                  lastFile = file;
+                  pushLine(ev.type === "match" ? `${file}:${ev.data?.line_number}: ${lineText}` : `${file}-${ev.data?.line_number}- ${lineText}`, ev.type === "match");
                 }
-                if (ev.type !== "match" && ev.type !== "context") continue;
-                const file = (ev.data?.path?.text ?? "").split(sep).join("/");
-                const lineText = (ev.data?.lines?.text ?? "").replace(/\r?\n$/, "");
-                if (ev.type === "match" && matches >= limit) {
-                  stopped = true;
-                  stop.abort();
-                  return;
-                }
-                if (context && lastFile && file !== lastFile) lines.push("--");
-                lastFile = file;
-                pushLine(ev.type === "match" ? `${file}:${ev.data?.line_number}: ${lineText}` : `${file}-${ev.data?.line_number}- ${lineText}`, ev.type === "match");
-              }
-            },
-          });
-          if (!stopped && r.code !== 0 && r.code !== 1 && !ctx.signal.aborted) return { output: other.trim() || `rg exited with code ${r.code}`, isError: true };
+              },
+            });
+            return { code: r.code, other, stopped };
+          };
+          let ran = await runRg(literal);
+          if (!ran.stopped && !literal && ran.code !== 0 && ran.code !== 1 && !ctx.signal.aborted && /regex parse error/i.test(ran.other)) {
+            fixedFallback = true;
+            ran = await runRg(true);
+          }
+          if (!ran.stopped && ran.code !== 0 && ran.code !== 1 && !ctx.signal.aborted) return { output: ran.other.trim() || `rg exited with code ${ran.code}`, isError: true };
         } else {
           let re: RegExp;
+          const flags = icase ? "i" : "";
           try {
-            re = new RegExp(literal ? pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : pattern, icase ? "i" : "");
+            re = new RegExp(literal ? escapeLiteral(pattern) : pattern, flags);
           } catch (err) {
-            throw new ToolInputError(`invalid regex: ${String(err)}`);
+            if (literal) throw new ToolInputError(`invalid regex: ${String(err)}`);
+            fixedFallback = true;
+            re = new RegExp(escapeLiteral(pattern), flags);
           }
           const globRe = fileGlob ? globToRegExp(fileGlob) : undefined;
           const st = await stat(target);
@@ -773,13 +790,14 @@ const grepTool: ToolDef = {
             }
           }
         }
-        if (matches === 0) return { output: "No matches found" };
+        if (matches === 0) return { output: fixedFallback ? "No matches found\n\n[Pattern is not a valid regex; searched as a fixed string.]" : "No matches found" };
         const shown = lines.map((l) => (process.platform === "win32" ? l.replace(/^[^:]+?(?=[:-]\d+[:-])/, (p) => p.replace(/\\/g, "/")) : l));
         const { kept, byBytes } = truncateHead(shown, Number.MAX_SAFE_INTEGER, MAX_BYTES);
         const notes: string[] = [];
         if (matches >= limit) notes.push(`${limit} matches limit reached. Use limit=${limit * 2} for more, or refine pattern.`);
         if (byBytes) notes.push(`${fmtKB(MAX_BYTES)} limit reached.`);
         if (cutLines) notes.push(`Some lines truncated to ${GREP_MAX_LINE} chars. Use read to see full lines.`);
+        if (fixedFallback) notes.push("Pattern is not a valid regex; searched as a fixed string.");
         return { output: kept.join("\n") + (notes.length ? `\n\n[${notes.join(" ")}]` : "") };
       },
     };
