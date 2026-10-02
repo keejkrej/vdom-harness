@@ -835,6 +835,25 @@ async function main(): Promise<void> {
         rmSync(heartbeat, { force: true });
       }
     }
+
+    // ---- a second process must not edit a checkout this process already holds (I-20261002-cf19)
+    {
+      const other = startAgent(routedEnv);
+      try {
+        await other.conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+        await other.conn.authenticate({ methodId: "cursor_login" });
+        let message = "";
+        try {
+          await other.conn.newSession({ cwd: ws, mcpServers: [] });
+        } catch (err) {
+          message = err instanceof Error ? err.message : String(err);
+        }
+        assert.match(message, /in use by pid/, "a second vdom process is refused while this one holds the checkout");
+        console.log("ok second process refused while checkout is locked");
+      } finally {
+        other.child.kill();
+      }
+    }
   } finally {
     h.child.kill();
     server.close();

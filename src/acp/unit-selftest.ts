@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { checkoutKey, releaseCheckoutLock, takeCheckoutLock } from "./checkout-lock.js";
 import { applyEdits, coerceEdits, EditError, withFileLock } from "./edit.js";
 import { findCut, isContextOverflow, serialize } from "./compaction.js";
 import { loadContextFiles, loadSkills, loadTemplates, substituteArgs, splitArgs } from "./resources.js";
@@ -460,6 +461,28 @@ console.log("ok templates");
   }
   assert.match(warned, /routeLadder/, "the warning names the offending key");
   console.log("ok config: list values accept strings");
+}
+
+// ---- checkout lock: a live other process is refused; a dead one is stolen (I-20261002-cf19)
+{
+  const dir = mkdtempSync(join(tmpdir(), "vdom-lock-"));
+  const cwd = mkdtempSync(join(tmpdir(), "vdom-checkout-"));
+  const first = await takeCheckoutLock({ cwd, dir, alive: () => true });
+  assert.equal(first.ok, true);
+  const again = await takeCheckoutLock({ cwd, dir, alive: () => true });
+  assert.equal(again.ok, true, "the holding process may open another session");
+  await releaseCheckoutLock({ cwd, dir });
+  const deadPid = process.pid === 1 ? 2 : 1;
+  const name = checkoutKey(cwd);
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ pid: deadPid, cwd, startedAt: "t" }));
+  const stolen = await takeCheckoutLock({ cwd, dir, alive: (pid) => pid !== deadPid });
+  assert.equal(stolen.ok, true, "a dead holder's lock is stolen");
+  await releaseCheckoutLock({ cwd, dir });
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ pid: deadPid, cwd, startedAt: "t" }));
+  const blocked = await takeCheckoutLock({ cwd, dir, alive: () => true });
+  assert.equal(blocked.ok, false, "a live other pid keeps the checkout");
+  if (!blocked.ok) assert.equal(blocked.holder.pid, deadPid);
+  console.log("ok checkout lock refuses a live other process");
 }
 
 console.log("unit selftest passed");

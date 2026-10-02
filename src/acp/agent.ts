@@ -41,6 +41,7 @@ import {
   type ToolCallContent,
   type ToolKind,
 } from "@agentclientprotocol/sdk";
+import { releaseCheckoutLock, takeCheckoutLock } from "./checkout-lock.js";
 import { vdomHome, type AgentConfig } from "./config.js";
 import { compact, estimateTokens, isContextOverflow, RESERVE_TOKENS, type CompactionState } from "./compaction.js";
 import { ModelRouter, stepReason, TRIGGER_REASONS, type RouteState } from "./routing.js";
@@ -155,13 +156,51 @@ export class VdomAgent implements Agent {
     void this.store.pruneEmpty().catch(() => {});
   }
 
+  /** Open sessions per checkout. One process may hold many; another process may not. */
+  private readonly checkoutHolds = new Map<string, number>();
+
   /** Stop background jobs and MCP servers (process exit). */
   async shutdown(): Promise<void> {
-    for (const live of this.sessions.values()) {
+    const lives = [...this.sessions.values()];
+    for (const live of lives) {
       live.abort?.abort(new Cancelled());
       for (const bg of live.background) bg.abort(new Cancelled());
       live.jobs.killAll();
       await live.mcp.close();
+    }
+    this.sessions.clear();
+    for (const live of lives) await this.dropCheckout(live.rec.cwd);
+  }
+
+  private checkoutHoldKey(cwd: string): string {
+    const full = resolve(cwd);
+    return process.platform === "win32" ? full.toLowerCase() : full;
+  }
+
+  /** Refuse a second live process in this directory (I-20261002-cf19). */
+  private async holdCheckout(cwd: string): Promise<void> {
+    const key = this.checkoutHoldKey(cwd);
+    const n = this.checkoutHolds.get(key) ?? 0;
+    if (n === 0) {
+      const taken = await takeCheckoutLock({ cwd });
+      if (!taken.ok) {
+        throw RequestError.invalidRequest(
+          undefined,
+          `checkout ${cwd} is in use by pid ${taken.holder.pid}. Close that vdom before starting another session in the same directory.`,
+        );
+      }
+    }
+    this.checkoutHolds.set(key, n + 1);
+  }
+
+  private async dropCheckout(cwd: string): Promise<void> {
+    const key = this.checkoutHoldKey(cwd);
+    const n = (this.checkoutHolds.get(key) ?? 1) - 1;
+    if (n <= 0) {
+      this.checkoutHolds.delete(key);
+      await releaseCheckoutLock({ cwd });
+    } else {
+      this.checkoutHolds.set(key, n);
     }
   }
 
@@ -211,10 +250,16 @@ export class VdomAgent implements Agent {
       createdAt: now,
       updatedAt: now,
     };
-    const live = this.activate(rec, params.mcpServers);
-    await this.store.save(rec);
-    this.announceCommands(live);
-    return { sessionId: rec.id, modes: this.modeState(rec), configOptions: await this.configOptions(rec) };
+    await this.holdCheckout(rec.cwd);
+    try {
+      const live = this.activate(rec, params.mcpServers);
+      await this.store.save(rec);
+      this.announceCommands(live);
+      return { sessionId: rec.id, modes: this.modeState(rec), configOptions: await this.configOptions(rec) };
+    } catch (err) {
+      await this.dropCheckout(rec.cwd);
+      throw err;
+    }
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
@@ -245,10 +290,16 @@ export class VdomAgent implements Agent {
       updatedAt: now,
     };
     repairToolPairs(rec.messages);
-    const live = this.activate(rec, params.mcpServers);
-    await this.store.save(rec);
-    this.announceCommands(live);
-    return { sessionId: rec.id, modes: this.modeState(rec), configOptions: await this.configOptions(rec) };
+    await this.holdCheckout(rec.cwd);
+    try {
+      const live = this.activate(rec, params.mcpServers);
+      await this.store.save(rec);
+      this.announceCommands(live);
+      return { sessionId: rec.id, modes: this.modeState(rec), configOptions: await this.configOptions(rec) };
+    } catch (err) {
+      await this.dropCheckout(rec.cwd);
+      throw err;
+    }
   }
 
   async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
@@ -268,6 +319,7 @@ export class VdomAgent implements Agent {
       live.jobs.killAll();
       await live.mcp.close();
       this.sessions.delete(params.sessionId);
+      await this.dropCheckout(live.rec.cwd);
     }
     return {};
   }
@@ -1280,7 +1332,13 @@ export class VdomAgent implements Agent {
     rec.thought ??= "medium";
     rec.compaction ??= { readFiles: [], modifiedFiles: [] };
     repairToolPairs(rec.messages);
-    return this.activate(rec, mcpServers);
+    await this.holdCheckout(rec.cwd);
+    try {
+      return this.activate(rec, mcpServers);
+    } catch (err) {
+      await this.dropCheckout(rec.cwd);
+      throw err;
+    }
   }
 
   /** Re-emit history so the client can rebuild the transcript (session/load). */
